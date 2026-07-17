@@ -39,8 +39,14 @@ RUN php -v
 RUN composer --version
 
 # 8. Install PHP dependencies
+RUN php -v
+RUN which php
+RUN composer --version
+RUN composer diagnose
+
 ENV COMPOSER_MEMORY_LIMIT=-1
 RUN composer install --no-dev --optimize-autoloader --prefer-dist --no-progress
+RUN composer diagnose
 
 # 9. Fix permissions
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache && \
