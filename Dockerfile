@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     libzip-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql gd zip bcmath opcache
+    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache
 
 # 2. Enable Apache mod_rewrite for clean Laravel URLs
 RUN a2enmod rewrite
@@ -29,7 +29,7 @@ WORKDIR /var/www/html
 COPY . .
 
 # 6. Install Laravel packages
-RUN composer install --no-dev --optimize-autoloader
+RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
 
 # 7. Set correct permissions for Laravel's storage
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache

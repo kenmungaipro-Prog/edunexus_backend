@@ -10,9 +10,8 @@ class CleanupDuplicateUsersSeeder extends Seeder
     public function run(): void
     {
         $duplicateEmails = User::select('email')
-            ->selectRaw('COUNT(*) as count')
             ->groupBy('email')
-            ->having('count', '>', 1)
+            ->havingRaw('COUNT(*) > 1')
             ->pluck('email');
 
         foreach ($duplicateEmails as $email) {

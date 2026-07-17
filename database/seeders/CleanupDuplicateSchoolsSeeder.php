@@ -10,9 +10,8 @@ class CleanupDuplicateSchoolsSeeder extends Seeder
     public function run(): void
     {
         $duplicateCodes = School::select('school_code')
-            ->selectRaw('COUNT(*) as count')
             ->groupBy('school_code')
-            ->having('count', '>', 1)
+            ->havingRaw('COUNT(*) > 1')
             ->pluck('school_code');
 
         foreach ($duplicateCodes as $code) {

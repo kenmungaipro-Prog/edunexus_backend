@@ -12,7 +12,7 @@ class CleanupDuplicateClassRoomsSeeder extends Seeder
         $duplicateKeys = ClassRoom::select('school_id', 'session_id', 'grade', 'section')
             ->selectRaw('COUNT(*) as count')
             ->groupBy('school_id', 'session_id', 'grade', 'section')
-            ->having('count', '>', 1)
+            ->havingRaw('COUNT(*) > 1')
             ->get();
 
         foreach ($duplicateKeys as $duplicate) {
