@@ -16,7 +16,7 @@ RUN apt-get update && \
 
 # 2. Install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg && \
-    docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache
+    docker-php-ext-install -j$(nproc) pdo_mysql pdo_pgsql gd zip bcmath opcache mbstring dom curl exif
 
 # 3. Enable Apache mod_rewrite
 RUN a2enmod rewrite
