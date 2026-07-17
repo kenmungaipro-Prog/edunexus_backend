@@ -1,7 +1,7 @@
 FROM php:8.2-apache
 
 # 1. Install system dependencies & PHP extensions
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     libjpeg-dev \
     libfreetype6-dev \
@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     libzip-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache
+    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Enable Apache mod_rewrite for clean Laravel URLs
 RUN a2enmod rewrite
