@@ -1,20 +1,23 @@
 FROM php:8.3-apache
 
 # 1. Install system dependencies & PHP extensions
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpng-dev \
-    libjpeg-dev \
-    libfreetype6-dev \
-    libpq-dev \
-    libxml2-dev \
-    zip \
-    unzip \
-    git \
-    curl \
-    libzip-dev \
-    && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache ctype json tokenizer xmlwriter simplexml \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        libpng-dev \
+        libjpeg-dev \
+        libfreetype6-dev \
+        libpq-dev \
+        libxml2-dev \
+        zip \
+        unzip \
+        git \
+        curl \
+        libzip-dev; \
+    docker-php-ext-configure gd --with-freetype --with-jpeg; \
+    docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache ctype json tokenizer xmlwriter; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
 # 2. Enable Apache mod_rewrite for clean Laravel URLs
 RUN a2enmod rewrite
