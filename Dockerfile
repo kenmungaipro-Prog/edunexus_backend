@@ -6,13 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     libfreetype6-dev \
     libpq-dev \
+    libxml2-dev \
     zip \
     unzip \
     git \
     curl \
     libzip-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache ctype \
+    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache ctype json tokenizer xmlwriter simplexml \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Enable Apache mod_rewrite for clean Laravel URLs
@@ -30,8 +31,8 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www/html
 COPY . .
 
-# 6. Install Laravel packages with increased memory and verbose output
-RUN COMPOSER_MEMORY_LIMIT=-1 composer install --no-dev --optimize-autoloader --no-interaction --no-scripts --verbose
+# 6. Install Laravel packages with optimizations
+RUN COMPOSER_MEMORY_LIMIT=-1 composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
 
 # 7. Set correct permissions for Laravel's storage
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
