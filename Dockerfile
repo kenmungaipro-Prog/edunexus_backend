@@ -1,4 +1,4 @@
-FROM php:8.3-apache
+FROM php:8.4-apache
 
 # 1. Update package list and install minimal system dependencies
 RUN apt-get update && \
