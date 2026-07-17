@@ -35,6 +35,9 @@ WORKDIR /var/www/html
 # 7. Copy project files
 COPY . .
 
+RUN php -v
+RUN composer --version
+
 # 8. Install PHP dependencies
 ENV COMPOSER_MEMORY_LIMIT=-1
 RUN composer install --no-dev --optimize-autoloader --prefer-dist --no-progress
