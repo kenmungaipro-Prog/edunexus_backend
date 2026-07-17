@@ -1,4 +1,4 @@
-FROM php:8.2-apache
+FROM php:8.3-apache
 
 # 1. Install system dependencies & PHP extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libzip-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache \
+    && docker-php-ext-install pdo_mysql pdo_pgsql gd zip bcmath opcache ctype \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Enable Apache mod_rewrite for clean Laravel URLs
@@ -30,8 +30,8 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www/html
 COPY . .
 
-# 6. Install Laravel packages
-RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
+# 6. Install Laravel packages with increased memory and verbose output
+RUN COMPOSER_MEMORY_LIMIT=-1 composer install --no-dev --optimize-autoloader --no-interaction --no-scripts --verbose
 
 # 7. Set correct permissions for Laravel's storage
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
