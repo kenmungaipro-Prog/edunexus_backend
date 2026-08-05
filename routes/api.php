@@ -208,6 +208,8 @@ Route::prefix('v1')->group(function () {
 
             // Reports
             Route::get('reports/trial-balance', [JournalEntryController::class, 'trialBalance']);
+            Route::get('reports/income-statement', [JournalEntryController::class, 'incomeStatement']);
+            Route::get('reports/balance-sheet', [JournalEntryController::class, 'balanceSheet']);
         });
 
        // ── Library ────────────────────────────────────────────
@@ -228,11 +230,24 @@ Route::prefix('v1')->group(function () {
             Route::post('/vehicles',                    [TransportController::class, 'storeVehicle']);
             Route::get('/drivers',                      [TransportController::class, 'drivers']);
             Route::post('/drivers',                     [TransportController::class, 'storeDriver']);
+            Route::get('/routes/my',                    [TransportController::class, 'myRoute'])->middleware('role:driver');
+            Route::get('/routes/my/eta',                [TransportController::class, 'myRouteEta'])->middleware('role:driver');
+            Route::get('/geofences/my',                 [TransportController::class, 'myGeofences'])->middleware('role:driver');
+            Route::get('/geofence-events/my',           [TransportController::class, 'myGeofenceEvents'])->middleware('role:driver');
             Route::apiResource('routes', TransportController::class);
+            Route::get('/routes/{route}/geofences',     [TransportController::class, 'geofencesForRoute'])->middleware('role:admin,receptionist');
+            Route::post('/routes/{route}/geofences',    [TransportController::class, 'storeGeofence'])->middleware('role:admin,receptionist');
             Route::get('/live',                         [TransportController::class, 'live']);
             Route::post('/routes/{route}/assign',       [TransportController::class, 'assignStudent'])
                 ->middleware('role:admin,receptionist');
+            Route::post('/routes/{route}/pickup-status', [TransportController::class, 'reportPickupStatus'])->middleware('role:driver');
+            Route::get('/vehicles/{id}/telemetry/history', [TransportController::class, 'telemetryHistory']);
+            Route::get('/analytics/overview', [TransportController::class, 'transportAnalyticsOverview'])->middleware('role:driver,admin,superadmin');
+            Route::get('/analytics/driver-ranking', [TransportController::class, 'transportDriverRanking'])->middleware('role:driver,admin,superadmin');
+            Route::get('/analytics/heatmap', [TransportController::class, 'transportHeatMap'])->middleware('role:driver,admin,superadmin');
+            Route::get('/analytics/prediction', [TransportController::class, 'transportAnalyticsPrediction'])->middleware('role:driver,admin,superadmin');
             Route::post('/vehicles/{id}/telemetry', [TransportController::class, 'updateTelemetry']);
+            Route::post('/emergency', [TransportController::class, 'emergency']);
         });
 
         // ── Events ─────────────────────────────────────────────

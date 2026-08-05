@@ -1,0 +1,1 @@
+import{E as e}from"./chunk-2UH5WJXA-DkmkQs0j.js";import{t}from"./jsx-runtime-2-tmXQuq.js";t();async function n(){if(typeof window<`u`&&localStorage.getItem(`edunexus_token`))throw e(`/`);return null}export{n as clientLoader};

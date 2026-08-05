@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -20,6 +21,8 @@ class AuthController extends Controller
         ]);
 
         $user = User::where('email', $request->email)->first();
+
+        Log::info('AuthController@login - user status', ['email' => $request->email, 'status' => $user?->status]);
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
@@ -125,6 +128,7 @@ class AuthController extends Controller
             'receptionist' => ['read', 'students:create'],
             'student'    => ['profile:read', 'grades:read', 'attendance:read'],
             'parent'     => ['children:read'],
+            'driver'     => ['read', 'transport:telemetry', 'transport:route'],
             default      => ['read'],
         };
     }

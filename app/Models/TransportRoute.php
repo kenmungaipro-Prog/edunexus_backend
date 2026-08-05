@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use App\Models\TransportGeofence;
 
 class TransportRoute extends Model
 {
@@ -51,5 +52,10 @@ class TransportRoute extends Model
         return $this->belongsToMany(Student::class, 'transport_assignments')
                     ->withPivot('stop')
                     ->withTimestamps();
+    }
+
+    public function geofences(): HasMany
+    {
+        return $this->hasMany(TransportGeofence::class, 'transport_route_id');
     }
 }

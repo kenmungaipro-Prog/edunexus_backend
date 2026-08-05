@@ -15,8 +15,12 @@ class VehicleLocationUpdated implements ShouldBroadcastNow
 
     public array $vehicle;
 
+    public ?int $schoolId;
+
     public function __construct(Vehicle $vehicle)
     {
+        $this->schoolId = $vehicle->currentRoute?->school_id;
+
         // Format the data to match the frontend LiveVehicle interface exactly
         $this->vehicle = [
             'vehicle_id' => $vehicle->id,
@@ -35,8 +39,9 @@ class VehicleLocationUpdated implements ShouldBroadcastNow
      */
     public function broadcastOn(): Channel
     {
-        // Using a public channel for fleet tracking
-        return new Channel('fleet-delivery');
+        $channel = $this->schoolId ? "fleet-delivery.{$this->schoolId}" : 'fleet-delivery';
+
+        return new Channel($channel);
     }
 
     /**

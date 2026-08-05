@@ -53,6 +53,7 @@ class FeeController extends Controller
                 function (string $attribute, mixed $value, \Closure $fail) use ($request) {
                     $requiresReference = in_array($request->payment_method, [
                         'mpesa',
+                        'upi',
                         'bank_transfer',
                         'bank_deposit',
                         'card',

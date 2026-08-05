@@ -292,4 +292,144 @@ class JournalEntryController extends Controller
             ],
         ]);
     }
+
+    public function incomeStatement(Request $request): JsonResponse
+    {
+        $fromDate = $request->get('from_date', now()->startOfYear()->toDateString());
+        $toDate = $request->get('to_date', now()->toDateString());
+
+        $accounts = ChartOfAccount::where('school_id', $request->user()->school_id)
+            ->where('is_active', true)
+            ->whereIn('account_type', ['revenue', 'expense'])
+            ->with(['journalEntryLines' => function ($q) use ($fromDate, $toDate) {
+                $q->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
+                    $entry->where('status', 'posted')
+                        ->whereBetween('entry_date', [$fromDate, $toDate]);
+                });
+            }])
+            ->get()
+            ->map(function ($account) {
+                $totalDebit = $account->journalEntryLines->sum('debit');
+                $totalCredit = $account->journalEntryLines->sum('credit');
+
+                $balance = $account->normal_balance === 'debit'
+                    ? $totalDebit - $totalCredit
+                    : $totalCredit - $totalDebit;
+
+                return [
+                    'id' => $account->id,
+                    'account_code' => $account->account_code,
+                    'account_name' => $account->account_name,
+                    'account_type' => $account->account_type,
+                    'normal_balance' => $account->normal_balance,
+                    'amount' => $balance,
+                ];
+            });
+
+        $revenues = $accounts->where('account_type', 'revenue')->values();
+        $expenses = $accounts->where('account_type', 'expense')->values();
+
+        $totalRevenue = $revenues->sum('amount');
+        $totalExpense = $expenses->sum('amount');
+        $netIncome = $totalRevenue - $totalExpense;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'revenues' => $revenues,
+                'expenses' => $expenses,
+                'total_revenue' => $totalRevenue,
+                'total_expense' => $totalExpense,
+                'net_income' => $netIncome,
+                'from_date' => $fromDate,
+                'to_date' => $toDate,
+            ],
+        ]);
+    }
+
+    public function balanceSheet(Request $request): JsonResponse
+    {
+        $fromDate = $request->get('from_date', now()->startOfYear()->toDateString());
+        $toDate = $request->get('to_date', now()->toDateString());
+
+        $accounts = ChartOfAccount::where('school_id', $request->user()->school_id)
+            ->where('is_active', true)
+            ->whereIn('account_type', ['asset', 'liability', 'equity'])
+            ->with(['journalEntryLines' => function ($q) use ($fromDate, $toDate) {
+                $q->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
+                    $entry->where('status', 'posted')
+                        ->whereBetween('entry_date', [$fromDate, $toDate]);
+                });
+            }])
+            ->get()
+            ->map(function ($account) {
+                $totalDebit = $account->journalEntryLines->sum('debit');
+                $totalCredit = $account->journalEntryLines->sum('credit');
+
+                $balance = $account->normal_balance === 'debit'
+                    ? $totalDebit - $totalCredit
+                    : $totalCredit - $totalDebit;
+
+                return [
+                    'id' => $account->id,
+                    'account_code' => $account->account_code,
+                    'account_name' => $account->account_name,
+                    'account_type' => $account->account_type,
+                    'normal_balance' => $account->normal_balance,
+                    'amount' => $balance,
+                ];
+            });
+
+        $assets = $accounts->where('account_type', 'asset')->values();
+        $liabilities = $accounts->where('account_type', 'liability')->values();
+        $equity = $accounts->where('account_type', 'equity')->values();
+
+        $totalAssets = $assets->sum('amount');
+        $totalLiabilities = $liabilities->sum('amount');
+        $totalEquity = $equity->sum('amount');
+
+        // Compute net income for the period and include in equity as retained earnings
+        $incomeAccounts = ChartOfAccount::where('school_id', $request->user()->school_id)
+            ->whereIn('account_type', ['revenue', 'expense'])
+            ->with(['journalEntryLines' => function ($q) use ($fromDate, $toDate) {
+                $q->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
+                    $entry->where('status', 'posted')
+                        ->whereBetween('entry_date', [$fromDate, $toDate]);
+                });
+            }])
+            ->get()
+            ->map(function ($account) {
+                $totalDebit = $account->journalEntryLines->sum('debit');
+                $totalCredit = $account->journalEntryLines->sum('credit');
+                $balance = $account->normal_balance === 'debit'
+                    ? $totalDebit - $totalCredit
+                    : $totalCredit - $totalDebit;
+                return [ 'account_type' => $account->account_type, 'amount' => $balance ];
+            });
+
+        $totalRevenue = $incomeAccounts->where('account_type', 'revenue')->sum('amount');
+        $totalExpense = $incomeAccounts->where('account_type', 'expense')->sum('amount');
+        $netIncome = $totalRevenue - $totalExpense;
+
+        $equityWithIncome = $totalEquity + $netIncome;
+
+        $isBalanced = bccomp($totalAssets, bcadd($totalLiabilities, $equityWithIncome, 2), 2) === 0;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'assets' => $assets,
+                'liabilities' => $liabilities,
+                'equity' => $equity,
+                'total_assets' => $totalAssets,
+                'total_liabilities' => $totalLiabilities,
+                'total_equity' => $totalEquity,
+                'net_income' => $netIncome,
+                'equity_with_income' => $equityWithIncome,
+                'is_balanced' => $isBalanced,
+                'from_date' => $fromDate,
+                'to_date' => $toDate,
+            ],
+        ]);
+    }
 }

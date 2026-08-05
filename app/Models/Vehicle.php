@@ -40,4 +40,9 @@ class Vehicle extends Model
         // A vehicle is assigned to a specific transport route
         return $this->hasOne(TransportRoute::class, 'vehicle_id');
     }
+
+    public function telemetry(): HasMany
+    {
+        return $this->hasMany(VehicleTelemetry::class);
+    }
 }

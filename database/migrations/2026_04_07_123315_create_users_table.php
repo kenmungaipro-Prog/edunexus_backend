@@ -17,7 +17,7 @@ return new class extends Migration
             $table->string('name');
             $table->string('email')->unique();
             $table->string('password');
-            $table->enum('role', ['superadmin', 'admin', 'teacher', 'accountant', 'librarian', 'receptionist', 'student', 'parent'])
+            $table->enum('role', ['superadmin', 'admin', 'teacher', 'accountant', 'librarian', 'receptionist', 'student', 'parent', 'driver'])
                 ->default('student');
             $table->enum('status', ['active', 'inactive'])->default('active');
             $table->string('profile_photo')->nullable();

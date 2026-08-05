@@ -76,6 +76,11 @@ class User extends Authenticatable
         return $this->hasMany(Attendance::class, 'marked_by');
     }
 
+    public function driver(): HasOne
+    {
+        return $this->hasOne(Driver::class, 'user_id');
+    }
+
     public function examsCreated(): HasMany
     {
         return $this->hasMany(Exam::class, 'created_by');
@@ -139,5 +144,10 @@ class User extends Authenticatable
     public function isAccountant(): bool
     {
         return $this->hasRole('accountant');
+    }
+
+    public function isDriver(): bool
+    {
+        return $this->hasRole('driver');
     }
 }

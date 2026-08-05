@@ -24,6 +24,10 @@ class UserSeeder extends Seeder
             ['name' => 'Rajan Librarian',    'email' => 'library@greenwood.edu.in', 'role' => 'librarian'],
             ['name' => 'Arjun Kumar',        'email' => 'student@greenwood.edu.in', 'role' => 'student'],
             ['name' => 'Mrs. Priya Kumar',   'email' => 'parent@greenwood.edu.in', 'role' => 'parent'],
+            ['name' => 'Frank Castle',       'email' => 'frank.castle@greenwood.edu.in', 'role' => 'driver'],
+            ['name' => 'Sarah Connor',       'email' => 'sarah.connor@greenwood.edu.in', 'role' => 'driver'],
+            ['name' => 'Joel Miller',        'email' => 'joel.miller@greenwood.edu.in', 'role' => 'driver'],
+            ['name' => 'Ellen Ripley',       'email' => 'ellen.ripley@greenwood.edu.in', 'role' => 'driver'],
         ];
 
         foreach ($users as $userData) {

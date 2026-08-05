@@ -3,7 +3,7 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use App\Models\{Vehicle, Driver, TransportRoute, Student, School, AcademicSession, ClassRoom};
+use App\Models\{User, Vehicle, Driver, TransportRoute, Student, School, AcademicSession, ClassRoom};
 use Illuminate\Support\Facades\DB;
 
 class TransportSeeder extends Seeder
@@ -37,36 +37,59 @@ class TransportSeeder extends Seeder
             [
                 'name' => 'Eastern Bypass Route',
                 'fee'  => 3200,
-                'driver'  => ['name' => 'Frank Castle', 'license' => 'LIC-770088', 'phone' => '0711998877'],
+                'driver'  => [
+                    'name' => 'Frank Castle',
+                    'email' => 'frank.castle@greenwood.edu.in',
+                    'license' => 'LIC-770088',
+                    'phone' => '0711998877',
+                ],
                 'vehicle' => ['reg' => 'BUS-EDN-01', 'make' => 'Toyota', 'model' => 'Coaster', 'speed' => 45]
             ],
             [
                 'name' => 'Northern Suburbs',
                 'fee'  => 4500,
-                'driver'  => ['name' => 'Sarah Connor', 'license' => 'LIC-550022', 'phone' => '0722333444'],
+                'driver'  => [
+                    'name' => 'Sarah Connor',
+                    'email' => 'sarah.connor@greenwood.edu.in',
+                    'license' => 'LIC-550022',
+                    'phone' => '0722333444',
+                ],
                 'vehicle' => ['reg' => 'BUS-EDN-02', 'make' => 'Isuzu', 'model' => 'FRR', 'speed' => 0] // Stationary
             ],
             [
                 'name' => 'Western Express',
                 'fee'  => 2800,
-                'driver'  => ['name' => 'Joel Miller', 'license' => 'LIC-110044', 'phone' => '0733555666'],
+                'driver'  => [
+                    'name' => 'Joel Miller',
+                    'email' => 'joel.miller@greenwood.edu.in',
+                    'license' => 'LIC-110044',
+                    'phone' => '0733555666',
+                ],
                 'vehicle' => ['reg' => 'BUS-EDN-03', 'make' => 'Mercedes', 'model' => 'Sprinter', 'speed' => 52]
             ],
             [
                 'name' => 'Southern Link',
                 'fee'  => 3500,
-                'driver'  => ['name' => 'Ellen Ripley', 'license' => 'LIC-990033', 'phone' => '0744111222'],
+                'driver'  => [
+                    'name' => 'Ellen Ripley',
+                    'email' => 'ellen.ripley@greenwood.edu.in',
+                    'license' => 'LIC-990033',
+                    'phone' => '0744111222',
+                ],
                 'vehicle' => ['reg' => 'BUS-EDN-04', 'make' => 'Mitsubishi', 'model' => 'Rosa', 'speed' => 15]
             ],
         ];
 
         foreach ($routeData as $data) {
-            // Create or Update Driver
+            // Create or Update Driver user so driver login can authenticate against a matching transport driver record.
+            $driverUser = User::where('email', $data['driver']['email'])->first();
+
             $driver = Driver::updateOrCreate(
                 ['license_no' => $data['driver']['license']],
                 [
-                    'name' => $data['driver']['name'], 
-                    'phone' => $data['driver']['phone'], 
+                    'user_id' => $driverUser?->id,
+                    'name' => $data['driver']['name'],
+                    'phone' => $data['driver']['phone'],
                     'license_expiry' => '2029-01-01'
                 ]
             );
