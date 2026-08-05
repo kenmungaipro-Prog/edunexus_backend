@@ -32,10 +32,11 @@
             "App\\": "app/",
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/"
-        }
+        },
+        "files": ["app/helpers.php"]
     },
     "autoload-dev": {
-         "files": ["app/helpers.php"],
+         
         "psr-4": {
             "Tests\\": "tests/",
             "App\\": "app/"
