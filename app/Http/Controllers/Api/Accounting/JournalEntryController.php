@@ -432,4 +432,77 @@ class JournalEntryController extends Controller
             ],
         ]);
     }
+
+    public function cashFlow(Request $request): JsonResponse
+    {
+        $fromDate = $request->get('from_date', now()->startOfYear()->toDateString());
+        $toDate = $request->get('to_date', now()->toDateString());
+        $schoolId = $request->user()->school_id;
+
+        $cashAccounts = ChartOfAccount::where('school_id', $schoolId)
+            ->where('is_active', true)
+            ->where('account_type', 'asset')
+            ->where('is_bank_account', true)
+            ->get();
+
+        $cashAccountIds = $cashAccounts->pluck('id');
+
+        $periodLines = JournalEntryLine::whereIn('chart_of_account_id', $cashAccountIds)
+            ->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
+                $entry->where('status', 'posted')
+                    ->whereBetween('entry_date', [$fromDate, $toDate]);
+            })
+            ->get()
+            ->groupBy('chart_of_account_id');
+
+        $openingLines = JournalEntryLine::whereIn('chart_of_account_id', $cashAccountIds)
+            ->whereHas('journalEntry', function ($entry) use ($fromDate) {
+                $entry->where('status', 'posted')
+                    ->where('entry_date', '<', $fromDate);
+            })
+            ->get()
+            ->groupBy('chart_of_account_id');
+
+        $accounts = $cashAccounts->map(function ($account) use ($periodLines, $openingLines) {
+            $startingDebit = $openingLines->get($account->id)?->sum('debit') ?? 0;
+            $startingCredit = $openingLines->get($account->id)?->sum('credit') ?? 0;
+            $startingBalance = $account->normal_balance === 'debit'
+                ? $startingDebit - $startingCredit
+                : $startingCredit - $startingDebit;
+
+            $periodDebit = $periodLines->get($account->id)?->sum('debit') ?? 0;
+            $periodCredit = $periodLines->get($account->id)?->sum('credit') ?? 0;
+            $inflows = $periodDebit;
+            $outflows = $periodCredit;
+            $netChange = $inflows - $outflows;
+            $endingBalance = $startingBalance + $netChange;
+
+            return [
+                'id' => $account->id,
+                'account_code' => $account->account_code,
+                'account_name' => $account->account_name,
+                'account_type' => $account->account_type,
+                'normal_balance' => $account->normal_balance,
+                'starting_balance' => $startingBalance,
+                'inflows' => $inflows,
+                'outflows' => $outflows,
+                'net_change' => $netChange,
+                'ending_balance' => $endingBalance,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'cash_accounts' => $accounts,
+                'total_starting_balance' => $accounts->sum('starting_balance'),
+                'total_inflows' => $accounts->sum('inflows'),
+                'total_outflows' => $accounts->sum('outflows'),
+                'total_net_change' => $accounts->sum('net_change'),
+                'total_ending_balance' => $accounts->sum('ending_balance'),
+                'from_date' => $fromDate,
+                'to_date' => $toDate,
+            ],
+        ]);
+    }
 }

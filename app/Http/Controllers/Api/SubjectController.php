@@ -28,16 +28,15 @@ class SubjectController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $request->validate([
+        $validated = $request->validate([
             'name' => 'required|string|max:100',
             'code' => 'nullable|string|max:20|unique:subjects,code',
             'type' => 'required|in:core,elective,activity',
         ]);
 
-        $subject = Subject::create([
-            ...$request->validated(),
+        $subject = Subject::create(array_merge($validated, [
             'school_id' => currentSchoolId(),
-        ]);
+        ]));
 
         return response()->json([
             'success' => true,
@@ -56,13 +55,13 @@ class SubjectController extends Controller
 
     public function update(Request $request, Subject $subject): JsonResponse
     {
-        $request->validate([
+        $validated = $request->validate([
             'name' => 'sometimes|string|max:100',
             'code' => 'nullable|string|max:20|unique:subjects,code,' . $subject->id,
             'type' => 'sometimes|in:core,elective,activity',
         ]);
 
-        $subject->update($request->validated());
+        $subject->update($validated);
 
         return response()->json([
             'success' => true,

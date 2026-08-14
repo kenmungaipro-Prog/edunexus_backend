@@ -11,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class ParentProfileController extends Controller
 {
@@ -51,6 +52,9 @@ class ParentProfileController extends Controller
                       ->orWhere('phone', 'like', "%{$value}%")
                       ->orWhere('relationship', 'like', "%{$value}%");
             }))
+            ->when($request->status, fn($q, $value) => $q->whereHas('user', fn($u) => $u->where('status', $value)))
+            ->when($request->has_children === 'has', fn($q) => $q->has('children'))
+            ->when($request->has_children === 'none', fn($q) => $q->doesntHave('children'))
             ->paginate($request->per_page ?? 20);
 
         return response()->json(['success' => true, 'data' => $profiles]);
@@ -124,7 +128,7 @@ class ParentProfileController extends Controller
 
         $request->validate([
             'name'         => 'required|string|max:255',
-            'email'        => 'required|email|unique:users',
+            'email'        => 'nullable|email|unique:users',
             'password'     => 'nullable|string|min:8',
             'relationship' => 'nullable|string|max:100',
             'phone'        => 'nullable|string|max:20',
@@ -136,10 +140,12 @@ class ParentProfileController extends Controller
         $profile = DB::transaction(function () use ($request) {
             $schoolId = auth()->user()->school_id;
 
+            $email = trim((string) $request->input('email')) ?: null;
+
             $user = User::create([
                 'school_id' => $schoolId,
                 'name'      => $request->name,
-                'email'     => $request->email,
+                'email'     => $email ?? $this->generateFallbackEmail($request->name),
                 'password'  => Hash::make($request->password ?? 'Parent@123'),
                 'role'      => 'parent',
                 'status'    => 'active',
@@ -201,6 +207,12 @@ class ParentProfileController extends Controller
         });
 
         return response()->json(['success' => true, 'message' => 'Parent profile updated.', 'data' => $parent->fresh(['user', 'school', 'children'])]);
+    }
+
+    private function generateFallbackEmail(string $name): string
+    {
+        $slug = Str::slug($name) ?: 'parent';
+        return "{$slug}-" . uniqid() . '@no-email.local';
     }
 
     public function destroy(ParentProfile $parent): JsonResponse

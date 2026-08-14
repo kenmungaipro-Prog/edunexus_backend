@@ -114,7 +114,12 @@ class Student extends Model
 
     public function transportAssignments(): HasMany
     {
-        return $this->hasMany(TransportAssignment::class);
+        return $this->hasMany(\App\Models\Transport\TransportAssignment::class);
+    }
+
+    public function tripStudents(): HasMany
+    {
+        return $this->hasMany(\App\Models\Transport\TripStudent::class, 'student_id');
     }
 
     public function bookIssues(): HasMany

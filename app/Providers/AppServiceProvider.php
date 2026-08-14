@@ -6,6 +6,7 @@
 namespace App\Providers;
 
 use App\Models\Student;
+use App\Models\TimetableSlot;
 use App\Observers\StudentObserver;
 use App\Policies\StudentPolicy;
 use Illuminate\Support\Facades\Gate;
@@ -22,6 +23,9 @@ class AppServiceProvider extends ServiceProvider
 
         // Policies (auto-discovered, but explicit for clarity)
         Gate::policy(Student::class, StudentPolicy::class);
+
+        // Route model binding for timetable slots
+        \Illuminate\Support\Facades\Route::model('slot', TimetableSlot::class);
 
         // Sanctum token expiry (using default model since App\Models\PersonalAccessToken does not exist)
         // \Laravel\Sanctum\Sanctum::usePersonalAccessTokenModel(

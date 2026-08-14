@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Models\Transport\TransportRoute;
+use App\Models\Transport\TransportGeofence;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 

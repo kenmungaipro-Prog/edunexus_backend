@@ -61,26 +61,60 @@ class TransportTripController extends Controller
     {
         $trip = $this->tripService->getTripForSchool(currentSchoolId(), $tripId);
 
+        $user = auth()->user();
+
+        if ($user->isDriver()) {
+            if (! $user->driver || $trip->driver_id !== $user->driver->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You are not authorized to start this trip.',
+                ], 403);
+            }
+        }
+
         try {
             $trip = $this->tripService->startTrip($trip);
         } catch (\InvalidArgumentException $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
         }
 
-        return response()->json(['success' => true, 'data' => $trip]);
+        return response()->json([
+            'success' => true,
+            'data' => $trip,
+        ]);
     }
 
     public function endTrip(Request $request, $tripId): JsonResponse
     {
         $trip = $this->tripService->getTripForSchool(currentSchoolId(), $tripId);
 
+        $user = auth()->user();
+
+        if ($user->isDriver()) {
+            if (! $user->driver || $trip->driver_id !== $user->driver->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You are not authorized to end this trip.',
+                ], 403);
+            }
+        }
+
         try {
             $trip = $this->tripService->completeTrip($trip);
         } catch (\InvalidArgumentException $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
         }
 
-        return response()->json(['success' => true, 'data' => $trip]);
+        return response()->json([
+            'success' => true,
+            'data' => $trip,
+        ]);
     }
 
     public function showTrip($tripId): JsonResponse

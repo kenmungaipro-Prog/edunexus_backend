@@ -132,6 +132,37 @@ class TransportController extends Controller
         return response()->json(['success' => true, 'data' => $stop], 201);
     }
 
+    public function updateStop(Request $request, $routeId, $stopId): JsonResponse
+    {
+        $route = TransportRoute::where('school_id', currentSchoolId())->findOrFail($routeId);
+        $stop = TransportStop::where('transport_route_id', $route->id)->findOrFail($stopId);
+
+        $validated = $request->validate([
+            'name' => 'sometimes|required|string|max:255',
+            'latitude' => 'sometimes|required|numeric',
+            'longitude' => 'sometimes|required|numeric',
+            'sequence' => 'sometimes|required|integer|min:0',
+            'pickup_time' => 'nullable|date_format:H:i',
+            'dropoff_time' => 'nullable|date_format:H:i',
+            'geofence_radius' => 'nullable|integer|min:25|max:500',
+            'status' => 'nullable|in:active,inactive',
+        ]);
+
+        $stop = $this->stopService->updateStop($route, $stop, $validated);
+
+        return response()->json(['success' => true, 'data' => $stop]);
+    }
+
+    public function deleteStop($routeId, $stopId): JsonResponse
+    {
+        $route = TransportRoute::where('school_id', currentSchoolId())->findOrFail($routeId);
+        $stop = TransportStop::where('transport_route_id', $route->id)->findOrFail($stopId);
+
+        $this->stopService->deleteStop($stop);
+
+        return response()->json(['success' => true, 'message' => 'Stop deleted.']);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([

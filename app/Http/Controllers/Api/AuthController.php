@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\DB;
 
 class AuthController extends Controller
 {
@@ -20,15 +21,29 @@ class AuthController extends Controller
             'password' => 'required|string|min:6',
         ]);
 
+        // Diagnostic: log which DB connection the HTTP request is using during tests
+        Log::info('AUTH LOGIN DB DEBUG', [
+            'database' => DB::connection()->getDatabaseName(),
+            'host'     => DB::connection()->getConfig('host'),
+            'user'     => DB::connection()->getConfig('username'),
+            'admin_status' => DB::table('users')->where('email', 'admin@test.com')->value('status'),
+        ]);
+
         $user = User::where('email', $request->email)->first();
 
         Log::info('AuthController@login - user status', ['email' => $request->email, 'status' => $user?->status]);
+        Log::info('AuthController@login - db user', ['db_user' => DB::table('users')->where('email', $request->email)->first()]);
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
         }
+
+        // Ensure we have the latest DB state for the user before checking status
+        Log::info('AuthController@login - before refresh', ['user' => $user->toArray()]);
+        $user->refresh();
+        Log::info('AuthController@login - after refresh', ['user' => $user->toArray()]);
 
         if ($user->status !== 'active') {
             return response()->json([

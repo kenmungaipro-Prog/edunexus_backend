@@ -1,0 +1,32 @@
+test started
+start createAssignedTripStudentTestData
+school created 130
+assignment created
+trip created 35
+test data ready
+before postJson create trip student
+after postJson create trip student
+start createAssignedTripStudentTestData
+school created 131
+assignment created
+trip created 36
+start createAssignedTripStudentTestData
+school created 132
+assignment created
+trip created 37
+start createAssignedTripStudentTestData
+school created 133
+assignment created
+trip created 38
+start createAssignedTripStudentTestData
+school created 134
+assignment created
+trip created 39
+start createAssignedTripStudentTestData
+school created 135
+assignment created
+trip created 40
+start createAssignedTripStudentTestData
+school created 136
+assignment created
+trip created 41

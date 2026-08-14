@@ -3,7 +3,8 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use App\Models\{User, Vehicle, Driver, TransportRoute, Student, School, AcademicSession, ClassRoom};
+use App\Models\{User, Vehicle, Driver, Student, School, AcademicSession, ClassRoom};
+use App\Models\Transport\TransportRoute;
 use Illuminate\Support\Facades\DB;
 
 class TransportSeeder extends Seeder

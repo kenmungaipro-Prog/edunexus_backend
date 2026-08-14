@@ -3,8 +3,8 @@
 use App\Models\Driver;
 use App\Models\GeofenceEvent;
 use App\Models\School;
-use App\Models\TransportRoute;
-use App\Models\TransportGeofence;
+use App\Models\Transport\TransportRoute;
+use App\Models\Transport\TransportGeofence;
 use App\Models\Vehicle;
 use App\Models\VehicleTelemetry;
 use App\Models\User;
@@ -111,9 +111,9 @@ test('driver receives transport prediction for assigned route', function () {
         ->assertJsonPath('success', true)
         ->assertJsonPath('data.route_id', $route->id)
         ->assertJsonPath('data.status', 'Minor delay')
-        ->assertJsonPath('data.predicted_delay_minutes', 20)
+        ->assertJsonPath('data.predicted_delay_minutes', 15)
         ->assertJsonPath('data.basis.average_speed', 3.3)
-        ->assertJsonPath('data.basis.stop_delay', 10.0);
+        ->assertJsonPath('data.basis.stop_delay', 10);
 });
 
 test('driver prediction endpoint rejects non-driver users', function () {

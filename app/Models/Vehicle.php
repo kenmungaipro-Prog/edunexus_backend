@@ -2,14 +2,20 @@
 
 namespace App\Models;
 
+use App\Models\Transport\TransportRoute;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+
+use App\Models\School;
 
 class Vehicle extends Model
 {
     protected $table = 'vehicles';
 
     protected $fillable = [
+        'school_id',
         'registration_number',
         'make',
         'model',
@@ -22,6 +28,7 @@ class Vehicle extends Model
     ];
 
     protected $casts = [
+        'school_id' => 'integer',
         'capacity' => 'integer',
         'last_lat' => 'float',
         'last_lng' => 'float',
@@ -39,6 +46,23 @@ class Vehicle extends Model
     {
         // A vehicle is assigned to a specific transport route
         return $this->hasOne(TransportRoute::class, 'vehicle_id');
+    }
+
+    public function school(): BelongsTo
+    {
+        return $this->belongsTo(School::class);
+    }
+
+    public function driverAssignments(): HasMany
+    {
+        return $this->hasMany(\App\Models\Transport\VehicleDriverAssignment::class, 'vehicle_id');
+    }
+
+    public function activeDriverAssignment(): HasOne
+    {
+        return $this->hasOne(\App\Models\Transport\VehicleDriverAssignment::class, 'vehicle_id')
+            ->where('status', 'active')
+            ->whereNull('ended_at');
     }
 
     public function telemetry(): HasMany

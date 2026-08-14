@@ -66,7 +66,7 @@ class School extends Model
 
     public function transportRoutes(): HasMany
     {
-        return $this->hasMany(TransportRoute::class);
+        return $this->hasMany(\App\Models\Transport\TransportRoute::class);
     }
 
     public function events(): HasMany

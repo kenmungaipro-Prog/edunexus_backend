@@ -13,6 +13,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Maatwebsite\Excel\Facades\Excel;
 
 class StudentController extends Controller
@@ -294,17 +295,32 @@ class StudentController extends Controller
             $parent = User::find($parentId);
         }
 
-        if (! $parent && $request->filled($parentEmailKey)) {
-            $parent = User::firstOrCreate(
-                ['email' => $request->input($parentEmailKey)],
-                [
-                    'name'      => $request->input($parentNameKey) ?: 'Parent',
+        if (! $parent && ($request->filled($parentEmailKey) || $request->filled($parentNameKey))) {
+            $email = $request->input($parentEmailKey);
+            $name = $request->input($parentNameKey) ?: 'Parent';
+
+            if ($email) {
+                $parent = User::firstOrCreate(
+                    ['email' => $email],
+                    [
+                        'name'      => $name,
+                        'password'  => Hash::make('Parent@123'),
+                        'role'      => 'parent',
+                        'status'    => 'active',
+                        'school_id' => currentSchoolId(),
+                    ]
+                );
+            } else {
+                $generatedEmail = Str::slug($name) ?: 'parent';
+                $parent = User::create([
+                    'name'      => $name,
+                    'email'     => $generatedEmail . '-' . uniqid() . '@no-email.local',
                     'password'  => Hash::make('Parent@123'),
                     'role'      => 'parent',
                     'status'    => 'active',
                     'school_id' => currentSchoolId(),
-                ]
-            );
+                ]);
+            }
             $parentId = $parent->id;
         }
 

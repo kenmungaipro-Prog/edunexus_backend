@@ -46,25 +46,7 @@ class FeeController extends Controller
             'fee_type_id'    => 'required|exists:fee_types,id',
             'amount'         => 'required|numeric|min:0.01',
             'payment_method' => 'required|in:' . implode(',', FeeRequest::PAYMENT_METHODS),
-            'transaction_id' => [
-                'nullable',
-                'string',
-                'max:100',
-                function (string $attribute, mixed $value, \Closure $fail) use ($request) {
-                    $requiresReference = in_array($request->payment_method, [
-                        'mpesa',
-                        'upi',
-                        'bank_transfer',
-                        'bank_deposit',
-                        'card',
-                        'online',
-                    ], true);
-
-                    if ($requiresReference && blank($value)) {
-                        $fail('Transaction reference is required for M-Pesa, bank, card, and online payments.');
-                    }
-                },
-            ],
+            'transaction_id' => ['nullable','string','max:100','required_if:payment_method,mpesa,upi,bank_transfer,bank_deposit,card,online'],
             'remarks'        => 'nullable|string|max:500',
         ]);
 
@@ -163,6 +145,13 @@ class FeeController extends Controller
     {
         $schoolId = currentSchoolId();
         $sessionId = currentSession();
+
+        \Illuminate\Support\Facades\Log::info('FeeController::summary debug', [
+            'school_id' => $schoolId,
+            'session_id' => $sessionId,
+            'fees_count' => \App\Models\Fee::count(),
+            'fees_for_school' => \App\Models\Fee::whereHas('student', fn($q) => $q->where('school_id', $schoolId))->where('session_id', $sessionId)->where('status', 'paid')->count(),
+        ]);
 
         $totalStudents = Student::where('school_id', $schoolId)->where('status', 'active')->count();
         $feeTypes      = FeeType::where('school_id', $schoolId)->get();

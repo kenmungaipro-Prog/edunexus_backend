@@ -10,7 +10,7 @@ class SchoolFactory extends Factory
     {
         return [
             'name' => 'EduNexus International School',
-            'address' => $this->faker->address(),
+            'address' => $this->faker->streetAddress() . ', ' . $this->faker->city(),
             'phone' => $this->faker->phoneNumber(),
             'email' => $this->faker->companyEmail(),
         ];

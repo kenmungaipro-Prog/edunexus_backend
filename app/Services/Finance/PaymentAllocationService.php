@@ -27,6 +27,12 @@ class PaymentAllocationService
             $paymentNumber = 'PMT-' . date('Y') . '-' . str_pad($count, 5, '0', STR_PAD_LEFT);
 
             // 2. Create the Payment Record
+            // Ensure the received_by user exists to avoid FK constraint failures
+            $receivedBy = null;
+            if (! empty($userId) && \App\Models\User::where('id', $userId)->exists()) {
+                $receivedBy = $userId;
+            }
+
             $payment = Payment::create([
                 'school_id'               => $schoolId,
                 'student_id'              => $data['student_id'],
@@ -40,7 +46,7 @@ class PaymentAllocationService
                 'payer_name'              => $data['payer_name'] ?? null,
                 'payer_phone'             => $data['payer_phone'] ?? null,
                 'status'                  => FinanceStatuses::PAYMENT_SUCCESSFUL,
-                'received_by'             => $userId,
+                'received_by'             => $receivedBy,
                 'posted_to_ledger'        => false,
             ]);
 
@@ -60,7 +66,7 @@ class PaymentAllocationService
                 'school_id'      => $schoolId,
                 'receipt_number' => 'RCP-' . date('Y') . '-' . str_pad(Receipt::where('school_id', $schoolId)->count() + 1, 5, '0', STR_PAD_LEFT),
                 'receipt_date'   => $payment->payment_date,
-                'issued_by'      => $userId,
+                'issued_by'      => $receivedBy,
                 'status'         => FinanceStatuses::RECEIPT_ISSUED,
             ]);
 

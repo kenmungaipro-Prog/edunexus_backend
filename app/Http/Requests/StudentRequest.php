@@ -24,11 +24,14 @@ class StudentRequest extends FormRequest
             ? 'nullable|string|max:255'
             : 'required_without:parent_id|nullable|string|max:255';
 
-        $parentEmailRule = $isUpdate
-            ? 'nullable|email'
-            : 'required_without:parent_id|nullable|email';
+        $parentEmailRule = 'nullable|email';
 
-        $parentPhoneRule = 'nullable|string|max:20';
+        $parentPhoneRule = $isUpdate
+            ? 'nullable|string|max:20'
+            : 'required_without:parent_id|string|max:20';
+
+        // Secondary parent fields are optional unless explicitly provided
+        $secondaryParentPhoneRule = 'nullable|string|max:20';
 
         return [
             'first_name'    => $sometimes . 'required|string|max:100',
@@ -53,7 +56,7 @@ class StudentRequest extends FormRequest
             'parent_phone'  => $parentPhoneRule,
             'secondary_parent_name'  => 'nullable|string|max:255',
             'secondary_parent_email' => 'nullable|email',
-            'secondary_parent_phone' => $parentPhoneRule,
+            'secondary_parent_phone' => $secondaryParentPhoneRule,
         ];
     }
 
@@ -148,6 +151,7 @@ class StudentRequest extends FormRequest
             'class_id.required'     => 'Please select a class for the student.',
             'date_of_birth.before'  => 'Date of birth must be in the past.',
             'parent_email.required_without' => 'Parent email is required when no parent account exists.',
+            'parent_phone.required_without' => 'Parent phone is required when no parent account exists.',
             'parent_name.required'  => 'Parent name is required when creating a new parent account.',
         ];
     }

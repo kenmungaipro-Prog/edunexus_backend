@@ -1,0 +1,1 @@
+import{E as e,G as t}from"./chunk-2UH5WJXA-fXMMp1uU.js";var n=t({redirect:()=>e});export{n as t};

@@ -18,6 +18,8 @@ class TimetableSlot extends Model
         'start_time',
         'end_time',
         'room',
+        'slot_type',
+        'title',
     ];
 
     protected $casts = [
