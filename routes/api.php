@@ -23,7 +23,6 @@ use App\Http\Controllers\Api\{
     FeeController,
     TimetableController,
     LibraryController,
-    TransportController,
     EventController,
     MessageController,
     AnalyticsController,
@@ -32,6 +31,10 @@ use App\Http\Controllers\Api\{
     FeeTypeController,
     ParentProfileController,
 };
+use App\Http\Controllers\Api\Transport\TransportAssignmentController;
+use App\Http\Controllers\Api\Transport\TransportController;
+use App\Http\Controllers\Api\Transport\TransportFleetController;
+use App\Http\Controllers\Api\Transport\TransportTripController;
 
 
 Route::post('/debug-419', function (\Illuminate\Http\Request $request) {
@@ -66,6 +69,8 @@ Route::prefix('v1')->group(function () {
         Route::post('400222/validation', [\App\Http\Controllers\Api\Payments\CoopBankController::class, 'validation'])->name('api.coop.validation');
         // Confirmation endpoint where the bank posts successful payments
         Route::post('400222/confirmation', [\App\Http\Controllers\Api\Payments\CoopBankController::class, 'confirmation'])->name('api.coop.confirmation');
+        // Instant Notification Service (INS) endpoint for Co-op Bank (normalized INS payload)
+        Route::post('ins', [\App\Http\Controllers\Api\Payments\CoopBankController::class, 'instantNotification'])->name('api.coop.ins');
     });
 
     // ============================================================
@@ -140,6 +145,7 @@ Route::prefix('v1')->group(function () {
             Route::get('/',            [TimetableController::class, 'index']);
             Route::post('/',           [TimetableController::class, 'store'])->middleware('role:admin');
             Route::put('/{slot}',      [TimetableController::class, 'update'])->middleware('role:admin');
+            Route::delete('/{slot}',   [TimetableController::class, 'destroy'])->middleware('role:admin');
             Route::post('/generate',   [TimetableController::class, 'autoGenerate'])->middleware('role:admin');
         });
 
@@ -163,7 +169,7 @@ Route::prefix('v1')->group(function () {
             
         });
 
-        Route::middleware('role:admin,accountant')->prefix('finance')->group(function () {
+        Route::middleware('role:superadmin,admin,accountant')->prefix('finance')->group(function () {
             Route::get('dashboard/summary', [FinanceDashboardController::class, 'summary']);
             Route::get('dashboard/recent-payments', [FinanceDashboardController::class, 'recentPayments']);
 
@@ -194,7 +200,7 @@ Route::prefix('v1')->group(function () {
         });
 
         // ── Accounting ──────────────────────────────────────────
-        Route::middleware('role:admin,accountant')->prefix('accounting')->group(function () {
+        Route::middleware('role:superadmin,admin,accountant')->prefix('accounting')->group(function () {
             // Chart of Accounts
             Route::get('accounts/tree', [ChartOfAccountController::class, 'tree']);
             Route::get('accounts/by-type/{type}', [ChartOfAccountController::class, 'byType']);
@@ -210,6 +216,7 @@ Route::prefix('v1')->group(function () {
             Route::get('reports/trial-balance', [JournalEntryController::class, 'trialBalance']);
             Route::get('reports/income-statement', [JournalEntryController::class, 'incomeStatement']);
             Route::get('reports/balance-sheet', [JournalEntryController::class, 'balanceSheet']);
+            Route::get('reports/cash-flow', [JournalEntryController::class, 'cashFlow']);
         });
 
        // ── Library ────────────────────────────────────────────
@@ -226,26 +233,57 @@ Route::prefix('v1')->group(function () {
 
         // ── Transport ──────────────────────────────────────────
         Route::prefix('transport')->group(function () {
-            Route::get('/vehicles',                     [TransportController::class, 'vehicles']);
-            Route::post('/vehicles',                    [TransportController::class, 'storeVehicle']);
-            Route::get('/drivers',                      [TransportController::class, 'drivers']);
-            Route::post('/drivers',                     [TransportController::class, 'storeDriver']);
+            Route::get('/vehicles',                     [TransportFleetController::class, 'vehicles']);
+            Route::post('/vehicles',                    [TransportFleetController::class, 'storeVehicle']);
+            Route::get('/vehicles/{vehicle}',           [TransportFleetController::class, 'showVehicle']);
+            Route::put('/vehicles/{vehicle}',           [TransportFleetController::class, 'updateVehicle']);
+            Route::delete('/vehicles/{vehicle}',        [TransportFleetController::class, 'deleteVehicle']);
+            Route::get('/drivers',                      [TransportFleetController::class, 'drivers']);
+            Route::post('/drivers',                     [TransportFleetController::class, 'storeDriver']);
+            Route::get('/drivers/{driver}',             [TransportFleetController::class, 'showDriver']);
+            Route::put('/drivers/{driver}',             [TransportFleetController::class, 'updateDriver']);
+            Route::delete('/drivers/{driver}',          [TransportFleetController::class, 'deleteDriver']);
             Route::get('/routes/my',                    [TransportController::class, 'myRoute'])->middleware('role:driver');
             Route::get('/routes/my/eta',                [TransportController::class, 'myRouteEta'])->middleware('role:driver');
             Route::get('/geofences/my',                 [TransportController::class, 'myGeofences'])->middleware('role:driver');
             Route::get('/geofence-events/my',           [TransportController::class, 'myGeofenceEvents'])->middleware('role:driver');
+            Route::get('/trips',                        [TransportTripController::class, 'listTrips'])->middleware('role:admin,superadmin');
+            Route::get('/trips/my',                     [TransportTripController::class, 'myTrips'])->middleware('role:driver');
+            Route::get('/trips/{trip}',                 [TransportTripController::class, 'showTrip'])->middleware('role:driver,admin,superadmin');
+            Route::get('/trips/{trip}/locations',       [TransportTripController::class, 'tripLocations'])->middleware('role:driver,admin,superadmin');
+            Route::post('/routes/{route}/trips',        [TransportTripController::class, 'scheduleTrip'])->middleware('role:admin,receptionist');
+            Route::post('/trips/{trip}/start',          [TransportTripController::class, 'startTrip'])->middleware('role:driver,admin,receptionist');
+            Route::post('/trips/{trip}/end',            [TransportTripController::class, 'endTrip'])->middleware('role:driver,admin,receptionist');
+            Route::get('/routes/{route}/stops',          [TransportController::class, 'stopsForRoute'])->middleware('role:admin,receptionist');
+            Route::post('/routes/{route}/stops',         [TransportController::class, 'storeStop'])->middleware('role:admin,receptionist');
+            Route::put('/routes/{route}/stops/{stop}',   [TransportController::class, 'updateStop'])->middleware('role:admin,receptionist');
+            Route::delete('/routes/{route}/stops/{stop}',[TransportController::class, 'deleteStop'])->middleware('role:admin,receptionist');
+            Route::get('/trips/{trip}/stops',             [TransportTripController::class, 'tripStops'])->middleware('role:driver,admin,superadmin');
+            Route::post('/trips/{trip}/stops/{stop}',     [TransportTripController::class, 'storeTripStop'])->middleware('role:driver,admin,superadmin');
+            Route::put('/trips/{trip}/stops/{tripStop}',  [TransportTripController::class, 'updateTripStop'])->middleware('role:driver,admin,superadmin');
+            Route::delete('/trips/{trip}/stops/{tripStop}', [TransportTripController::class, 'deleteTripStop'])->middleware('role:driver,admin,superadmin');
+            Route::get('/trips/{trip}/students',          [TransportTripController::class, 'tripStudents'])->middleware('role:driver,admin,superadmin');
+            Route::post('/trips/{trip}/students',         [TransportTripController::class, 'storeTripStudent'])->middleware('role:driver,admin,superadmin');
+            Route::put('/trips/{trip}/students/{tripStudent}', [TransportTripController::class, 'updateTripStudent'])->middleware('role:driver,admin,superadmin');
+            Route::post('/trips/{trip}/students/{tripStudent}/board', [TransportTripController::class, 'boardTripStudent'])->middleware('role:driver,admin,superadmin');
+            Route::post('/trips/{trip}/students/{tripStudent}/drop-off', [TransportTripController::class, 'dropOffTripStudent'])->middleware('role:driver,admin,superadmin');
             Route::apiResource('routes', TransportController::class);
             Route::get('/routes/{route}/geofences',     [TransportController::class, 'geofencesForRoute'])->middleware('role:admin,receptionist');
             Route::post('/routes/{route}/geofences',    [TransportController::class, 'storeGeofence'])->middleware('role:admin,receptionist');
             Route::get('/live',                         [TransportController::class, 'live']);
-            Route::post('/routes/{route}/assign',       [TransportController::class, 'assignStudent'])
+            Route::post('/routes/{route}/assign',       [TransportAssignmentController::class, 'assignStudent'])
                 ->middleware('role:admin,receptionist');
-            Route::post('/routes/{route}/pickup-status', [TransportController::class, 'reportPickupStatus'])->middleware('role:driver');
+            Route::post('/routes/{route}/pickup-status', [TransportAssignmentController::class, 'reportPickupStatus'])->middleware('role:driver');
             Route::get('/vehicles/{id}/telemetry/history', [TransportController::class, 'telemetryHistory']);
             Route::get('/analytics/overview', [TransportController::class, 'transportAnalyticsOverview'])->middleware('role:driver,admin,superadmin');
             Route::get('/analytics/driver-ranking', [TransportController::class, 'transportDriverRanking'])->middleware('role:driver,admin,superadmin');
             Route::get('/analytics/heatmap', [TransportController::class, 'transportHeatMap'])->middleware('role:driver,admin,superadmin');
             Route::get('/analytics/prediction', [TransportController::class, 'transportAnalyticsPrediction'])->middleware('role:driver,admin,superadmin');
+            Route::get('/vehicles/{vehicle}/assignments', [TransportFleetController::class, 'vehicleAssignments']);
+            Route::post('/vehicles/{vehicle}/assignments', [TransportFleetController::class, 'storeVehicleAssignment']);
+            Route::put('/vehicles/{vehicle}/assignments/{assignment}', [TransportFleetController::class, 'updateVehicleAssignment']);
+            Route::delete('/vehicles/{vehicle}/assignments/{assignment}', [TransportFleetController::class, 'deleteVehicleAssignment']);
+            Route::get('/drivers/{driver}/assignments', [TransportFleetController::class, 'driverAssignments']);
             Route::post('/vehicles/{id}/telemetry', [TransportController::class, 'updateTelemetry']);
             Route::post('/emergency', [TransportController::class, 'emergency']);
         });

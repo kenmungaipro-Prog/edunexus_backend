@@ -9,7 +9,7 @@ namespace App\Http\Controllers\Api\Payments;
 use App\Http\Controllers\Controller;
 use App\Models\Student;
 use App\Models\StudentFinanceBalance;
-use App\Services\Payments\MpesaService;
+use App\Services\Payments\PaymentGatewayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Exception;
@@ -17,7 +17,7 @@ use Exception;
 class ParentPaymentController extends Controller
 {
     public function __construct(
-        protected MpesaService $mpesaService
+        protected PaymentGatewayService $paymentGatewayService
     ) {}
 
     /**
@@ -99,7 +99,7 @@ class ParentPaymentController extends Controller
         try {
             // Initiate the push via our service. 
             // We use the student's admission number as the strict Account Reference.
-            $response = $this->mpesaService->initiateStkPush(
+            $response = $this->paymentGatewayService->initiateStkPush(
                 schoolId: $schoolId,
                 studentId: $student->id,
                 phone: $validated['phone_number'],
@@ -143,7 +143,7 @@ class ParentPaymentController extends Controller
         }
 
         try {
-            $response = $this->mpesaService->initiateStkPush(
+            $response = $this->paymentGatewayService->initiateStkPush(
                 schoolId: $student->school_id,
                 studentId: $student->id,
                 phone: $validated['phone_number'],

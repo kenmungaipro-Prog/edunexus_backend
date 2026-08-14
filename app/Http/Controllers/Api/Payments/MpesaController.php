@@ -8,16 +8,16 @@
 namespace App\Http\Controllers\Api\Payments;
 
 use App\Http\Controllers\Controller;
-use App\Services\Payments\MpesaService;
+use App\Services\Payments\PaymentGatewayService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use App\Jobs\ProcessMpesaCallback;
+use App\Jobs\ProcessPaymentGatewayCallback;
 
 class MpesaController extends Controller
 {
-    public function __construct(protected MpesaService $mpesaService) {}
+    public function __construct(protected PaymentGatewayService $paymentGatewayService) {}
 
     protected function resolveCallbackContext(?string $checkoutRequestId = null, ?string $merchantRequestId = null): array
     {
@@ -107,9 +107,9 @@ class MpesaController extends Controller
 
             // 2. Dispatch processing job (synchronous execution ensures callback handling during webhook requests)
             if ($resultCode === '0') {
-                ProcessMpesaCallback::dispatchSync(callbackId: $callbackId, type: 'stk', merchantRequestId: $merchantRequestId, checkoutRequestId: $checkoutRequestId, amount: $amount, receipt: $receipt, phone: $phone);
+                ProcessPaymentGatewayCallback::dispatchSync(callbackId: $callbackId, type: 'stk', merchantRequestId: $merchantRequestId, checkoutRequestId: $checkoutRequestId, amount: $amount, receipt: $receipt, phone: $phone);
             } else {
-                ProcessMpesaCallback::dispatchSync(callbackId: $callbackId, type: 'stk', merchantRequestId: $merchantRequestId);
+                ProcessPaymentGatewayCallback::dispatchSync(callbackId: $callbackId, type: 'stk', merchantRequestId: $merchantRequestId);
             }
 
             return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
@@ -230,7 +230,7 @@ class MpesaController extends Controller
             }
 
             // 2. Dispatch processing job to allocate or push to suspense
-            ProcessMpesaCallback::dispatchSync(callbackId: $callbackId, type: 'c2b', checkoutRequestId: $accountRef, amount: $amount, receipt: $receipt, phone: $phone);
+            ProcessPaymentGatewayCallback::dispatchSync(callbackId: $callbackId, type: 'c2b', checkoutRequestId: $accountRef, amount: $amount, receipt: $receipt, phone: $phone);
 
             return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
 

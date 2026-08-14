@@ -2,14 +2,14 @@
 
 namespace App\Jobs;
 
-use App\Services\Payments\MpesaService;
+use App\Services\Payments\PaymentGatewayService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
-class ProcessMpesaCallback implements ShouldQueue
+class ProcessPaymentGatewayCallback implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -23,19 +23,25 @@ class ProcessMpesaCallback implements ShouldQueue
         public ?string $phone = null
     ) {}
 
-    public function handle(MpesaService $mpesaService)
+    public function handle(PaymentGatewayService $paymentGatewayService)
     {
         if ($this->type === 'stk') {
             if ($this->amount && $this->merchantRequestId && $this->receipt && $this->phone) {
-                $mpesaService->processStkResult($this->callbackId, $this->merchantRequestId, $this->amount, $this->receipt, $this->phone);
+                $paymentGatewayService->processStkResult($this->callbackId, $this->merchantRequestId, $this->amount, $this->receipt, $this->phone);
             } elseif ($this->merchantRequestId && !$this->amount) {
                 // STK failed or did not provide metadata: mark as failed
-                $mpesaService->markStkFailed($this->merchantRequestId, 'STK push failed or user cancelled');
+                $paymentGatewayService->markStkFailed($this->merchantRequestId, 'STK push failed or user cancelled');
             }
         } elseif ($this->type === 'c2b') {
-            if ($this->receipt && $this->amount && $this->phone && $this->checkoutRequestId) {
+            if ($this->receipt && $this->amount && $this->checkoutRequestId) {
                 // Here checkoutRequestId holds accountRef for convenience
-                $mpesaService->processC2bConfirmation($this->callbackId, $this->receipt, $this->amount, $this->phone, $this->checkoutRequestId);
+                $paymentGatewayService->processC2bConfirmation(
+                    $this->callbackId,
+                    $this->receipt,
+                    $this->amount,
+                    $this->phone ?? '',
+                    $this->checkoutRequestId
+                );
             }
         }
     }

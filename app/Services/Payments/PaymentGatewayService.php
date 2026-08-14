@@ -1,7 +1,7 @@
 <?php
 
 // Route Path: Service Class (Not directly routable. Consumed by MpesaController and STK API endpoints)
-// Path: app/Services/Payments/MpesaService.php
+// Path: app/Services/Payments/PaymentGatewayService.php
 
 namespace App\Services\Payments;
 
@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Exception;
 
-class MpesaService
+class PaymentGatewayService
 {
     public function __construct(
         protected PaymentAllocationService $paymentService
@@ -193,9 +193,17 @@ class MpesaService
 
         DB::transaction(function () use ($callbackId, $schoolId, $gatewayName, $receipt, $amount, $phone, $accountRef) {
             // Attempt to find student by Admission Number matching the AccountReference
+            Log::channel('mpesa')->info('Looking up student', [
+                'school_id' => $schoolId,
+                'accountRef' => $accountRef,
+            ]);
             $student = Student::where('school_id', $schoolId)
                 ->where('admission_no', $accountRef)
                 ->first();
+            Log::channel('mpesa')->info('Student lookup result', [
+                'student_found' => $student ? true : false,
+                'student_id' => $student?->id,
+            ]);
 
             $paymentMethod = $this->mapGatewayToPaymentMethod($gatewayName);
 
