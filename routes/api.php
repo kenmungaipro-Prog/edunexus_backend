@@ -338,6 +338,10 @@ Route::prefix('v1')->group(function () {
             Route::get('analytics', [ParentPaymentController::class, 'analytics']);
             Route::get('students/{student}/finance', [ParentPaymentController::class, 'studentFinanceSummary']);
             Route::post('payments/mpesa/stk-push', [ParentPaymentController::class, 'initiateStkPush']);
+            
+            // Transport tracking for parents
+            Route::get('students/{student}/transport/trip', [TransportTripController::class, 'parentViewStudentTrip']);
+            Route::get('students/{student}/transport/status', [TransportTripController::class, 'parentStudentTransportStatus']);
         });
     });
 });

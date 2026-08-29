@@ -246,7 +246,7 @@ test('VehicleLocationUpdated uses the schools fleet channel', function () {
     $event = new VehicleLocationUpdated($context['vehicle']);
 
     expect($event->broadcastOn()->name)
-        ->toBe("fleet-delivery.{$context['school']->id}");
+        ->toBe("private-fleet-delivery.{$context['school']->id}");
 });
 
 test('VehicleLocationUpdated uses the expected broadcast name', function () {
