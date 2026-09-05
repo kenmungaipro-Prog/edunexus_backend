@@ -17,16 +17,22 @@ class Teacher extends Model
         'school_id',
         'employee_id',
         'phone',
+        'gender',
+        'dob',
+        'nationality',
         'department',
         'qualification',
         'experience_yrs',
+        'employment_type',
         'join_date',
         'salary',
+        'bio',
         'status',
     ];
 
     protected $casts = [
         'join_date' => 'date',
+        'dob' => 'date',
         'salary' => 'decimal:2',
         'experience_yrs' => 'integer',
     ];
