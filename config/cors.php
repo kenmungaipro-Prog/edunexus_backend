@@ -12,6 +12,7 @@ return [
         'http://localhost:5173', // Force allow your Vite dev port
         'http://127.0.0.1:5173',
         'https://eternity-ladybug-wiry.ngrok-free.dev',
+        'https://stpeterscatholicschoolkwihota.org',
     ],
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
