@@ -325,7 +325,7 @@ Route::prefix('v1')->group(function () {
             Route::put('/school', [\App\Http\Controllers\Api\SettingsController::class, 'updateSchool']);
         });
 
-        Route::prefix('finance')->group(function () {
+        Route::prefix('finance')->middleware('role:admin,superadmin,accountant')->group(function () {
         // Phase 2: M-Pesa Reconciliation
             Route::get('reconciliation', [PaymentReconciliationController::class, 'index']);
             Route::post('reconciliation/{item}/resolve', [PaymentReconciliationController::class, 'resolve']);
