@@ -132,6 +132,7 @@ Route::prefix('v1')->group(function () {
 
         // ── Attendance ─────────────────────────────────────────
         Route::prefix('attendance')->group(function () {
+            Route::get('/report',      [AttendanceController::class, 'report']);
             Route::get('/',            [AttendanceController::class, 'index']);
             Route::post('/mark',       [AttendanceController::class, 'mark'])->middleware('role:admin,teacher');
             Route::put('/{id}',        [AttendanceController::class, 'update'])->middleware('role:admin,teacher');
@@ -191,6 +192,7 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('payments', PaymentController::class)->only(['index', 'store', 'show']);
 
             // Receipts
+            Route::get('receipts/{receipt}/pdf', [ReceiptController::class, 'pdf']);
             Route::apiResource('receipts', ReceiptController::class)->only(['index', 'show'])->parameters(['receipts' => 'receipt']);
         });
 
@@ -224,6 +226,8 @@ Route::prefix('v1')->group(function () {
             // 1. Specific routes first
             Route::get('books/stats',          [LibraryController::class, 'stats']);
             Route::get('books/overdue',        [LibraryController::class, 'overdue']);
+            Route::get('books/members',        [LibraryController::class, 'members']);
+            Route::get('books/{book}/issues',  [LibraryController::class, 'issues']);
             Route::post('books/{book}/issue',  [LibraryController::class, 'issue']);
             Route::post('books/{book}/return', [LibraryController::class, 'return']);
             

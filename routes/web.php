@@ -12,11 +12,11 @@ Route::view('/login', 'app')->name('login');
 Route::view('/register', 'app')->name('register');
 
 Route::view('/{any}', 'app')
-    ->where('any', '.*');
+    ->where('any', '(?!api(?:/|$)).*');
 
 
 
 
 Route::get('/{any?}', function () {
     return response()->file(public_path('index.html'));
-})->where('any', '.*');
+})->where('any', '(?!api(?:/|$)).*');

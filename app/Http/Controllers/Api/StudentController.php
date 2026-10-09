@@ -20,7 +20,7 @@ class StudentController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $students = Student::with(['classRoom', 'parent'])
+        $students = Student::with(['classRoom', 'parent', 'secondaryParent'])
             ->where('school_id', currentSchoolId())
             ->when($request->class_id, fn ($q, $v) => $q->where('class_id', $v))
             ->when($request->status,   fn ($q, $v) => $q->where('status', $v))
@@ -92,6 +92,7 @@ class StudentController extends Controller
             'data'    => $student->load([
                 'classRoom',
                 'parent',
+                'secondaryParent',
                 'attendance',
                 'fees.feeType',
                 'grades.exam.subject',
@@ -124,7 +125,7 @@ class StudentController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Student updated.',
-            'data'    => $student->fresh('classRoom'),
+            'data'    => $student->fresh(['classRoom', 'parent', 'secondaryParent']),
         ]);
     }
 

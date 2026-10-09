@@ -8,8 +8,10 @@ namespace App\Http\Controllers\Api\Finance;
 
 use App\Http\Controllers\Controller;
 use App\Models\Receipt;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 class ReceiptController extends Controller
 {
@@ -47,5 +49,29 @@ class ReceiptController extends Controller
                 'payment.allocations.invoice'
             ])
         ]);
+    }
+
+    public function pdf(Request $request, Receipt $receipt): Response
+    {
+        if ($receipt->school_id !== $request->user()->school_id) {
+            abort(404);
+        }
+
+        if ($receipt->status !== 'issued') {
+            abort(422, 'Only issued receipts can be printed.');
+        }
+
+        $receipt->load([
+            'school',
+            'payment.student.classRoom',
+            'payment.student.school',
+            'payment.receivedBy',
+            'payment.allocations.invoice',
+        ]);
+
+        $pdf = Pdf::loadView('receipts.payment', compact('receipt'))
+            ->setPaper('a5', 'portrait');
+
+        return $pdf->download("receipt-{$receipt->receipt_number}.pdf");
     }
 }

@@ -129,10 +129,13 @@ class StudentRequest extends FormRequest
                 if ($parent && ! $parent->isParent()) {
                     $validator->errors()->add('secondary_parent_id', 'The selected secondary guardian account must belong to a parent user.');
                 }
+            }
 
-                if ($this->filled('parent_id') && $this->secondary_parent_id === $this->parent_id) {
-                    $validator->errors()->add('secondary_parent_id', 'The secondary guardian must be different from the primary guardian.');
-                }
+            $student = $this->route('student');
+            $primaryParentId = $this->input('parent_id', $student?->parent_id);
+            $secondaryParentId = $this->input('secondary_parent_id', $student?->secondary_parent_id);
+            if ($primaryParentId && $secondaryParentId && (string) $primaryParentId === (string) $secondaryParentId) {
+                $validator->errors()->add('secondary_parent_id', 'The secondary guardian must be different from the primary guardian.');
             }
 
             if ($this->filled('emergency_contact_parent_id')) {

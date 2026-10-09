@@ -9,6 +9,8 @@ use App\Models\Student;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Rule;
 
 class ExamController extends Controller
 {
@@ -37,7 +39,7 @@ class ExamController extends Controller
             'total_marks'    => 'required|integer|min:1',
             'passing_marks'  => 'required|integer|lt:total_marks',
             'room'           => 'nullable|string',
-            'invigilator_id' => 'nullable|exists:teachers,id',
+            'invigilator_id' => ['nullable', 'integer', Rule::exists('teachers', 'id')->where('school_id', currentSchoolId())],
             'instructions'   => 'nullable|string',
         ]);
 
@@ -58,6 +60,11 @@ class ExamController extends Controller
 
     public function show(Exam $exam): JsonResponse
     {
+        abort_unless(
+            $exam->classRoom()->where('school_id', currentSchoolId())->exists(),
+            404
+        );
+
         return response()->json([
             'success' => true,
             'data'    => $exam->load(['classRoom.students', 'subject', 'invigilator.user', 'grades.student']),
@@ -66,19 +73,51 @@ class ExamController extends Controller
 
     public function update(Request $request, Exam $exam): JsonResponse
     {
-        // 1. Capture the validated array
+        abort_unless(
+            $exam->classRoom()->where('school_id', currentSchoolId())->exists(),
+            404
+        );
+
         $validated = $request->validate([
-            'title'         => 'sometimes|string|max:255',
-            'exam_date'     => 'sometimes|date',
-            'start_time'    => 'sometimes|date_format:H:i',
-            'end_time'      => 'sometimes|date_format:H:i',
-            'total_marks'   => 'sometimes|integer|min:1',
-            'passing_marks' => 'sometimes|integer',
-            'room'          => 'nullable|string',
-            'status'        => 'sometimes|in:scheduled,ongoing,completed,cancelled',
+            'title'          => 'sometimes|required|string|max:255',
+            'class_id'       => ['sometimes', 'required', 'integer', Rule::exists('class_rooms', 'id')->where('school_id', currentSchoolId())],
+            'subject_id'     => ['sometimes', 'required', 'integer', Rule::exists('subjects', 'id')->where('school_id', currentSchoolId())],
+            'exam_date'      => 'sometimes|required|date',
+            'start_time'     => 'sometimes|required|date_format:H:i',
+            'end_time'       => 'sometimes|required|date_format:H:i',
+            'total_marks'    => 'sometimes|required|integer|min:1',
+            'passing_marks'  => 'sometimes|required|integer|min:0',
+            'room'           => 'nullable|string|max:255',
+            'invigilator_id' => ['nullable', 'integer', Rule::exists('teachers', 'id')->where('school_id', currentSchoolId())],
+            'instructions'   => 'nullable|string|max:5000',
+            'status'         => 'sometimes|required|in:scheduled,ongoing,completed,cancelled',
         ]);
 
-        // 2. Pass the array directly to update()
+        $totalMarks = $validated['total_marks'] ?? $exam->total_marks;
+        $passingMarks = $validated['passing_marks'] ?? $exam->passing_marks;
+        $startTime = $validated['start_time'] ?? $exam->start_time;
+        $endTime = $validated['end_time'] ?? $exam->end_time;
+        if (substr((string) $endTime, 0, 5) <= substr((string) $startTime, 0, 5)) {
+            throw ValidationException::withMessages([
+                'end_time' => ['The end time must be later than the start time.'],
+            ]);
+        }
+        if ($passingMarks >= $totalMarks) {
+            throw ValidationException::withMessages([
+                'passing_marks' => ['Passing marks must be less than total marks.'],
+            ]);
+        }
+
+        if ($exam->grades()->exists()) {
+            foreach (['class_id', 'subject_id', 'total_marks', 'passing_marks'] as $field) {
+                if (array_key_exists($field, $validated) && $validated[$field] != $exam->{$field}) {
+                    throw ValidationException::withMessages([
+                        $field => ['This exam detail cannot be changed after marks have been recorded.'],
+                    ]);
+                }
+            }
+        }
+
         $exam->update($validated);
 
         return response()->json([
@@ -107,24 +146,58 @@ class GradeController extends Controller
 {
     public function store(Request $request): JsonResponse
     {
-        $request->validate([
+        $validated = $request->validate([
             'exam_id' => 'required|exists:exams,id',
             'grades'  => 'required|array|min:1',
-            'grades.*.student_id'     => 'required|exists:students,id',
+            'grades.*.student_id'     => 'required|integer|distinct|exists:students,id',
             'grades.*.marks_obtained' => 'required|numeric|min:0',
-            'grades.*.remarks'        => 'nullable|string',
+            'grades.*.remarks'        => 'nullable|string|max:2000',
         ]);
 
-        $exam = Exam::findOrFail($request->exam_id);
+        $exam = Exam::whereHas('classRoom', fn ($query) =>
+            $query->where('school_id', currentSchoolId())
+        )->findOrFail($validated['exam_id']);
+        if ($exam->status === 'cancelled') {
+            throw ValidationException::withMessages([
+                'exam_id' => ['Marks cannot be entered for a cancelled exam.'],
+            ]);
+        }
+        if ($exam->status !== 'completed') {
+            throw ValidationException::withMessages([
+                'exam_id' => ['Marks can only be entered for completed exams.'],
+            ]);
+        }
 
-        DB::transaction(function () use ($request, $exam) {
-            foreach ($request->grades as $entry) {
+        $schoolStudentIds = Student::query()
+            ->where('school_id', currentSchoolId())
+            ->where('class_id', $exam->class_id)
+            ->whereIn('id', array_column($validated['grades'], 'student_id'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        foreach ($validated['grades'] as $index => $entry) {
+            if (!in_array((int) $entry['student_id'], $schoolStudentIds, true)) {
+                throw ValidationException::withMessages([
+                    "grades.{$index}.student_id" => ['This student is not enrolled in the exam class.'],
+                ]);
+            }
+            if ((float) $entry['marks_obtained'] > $exam->total_marks) {
+                throw ValidationException::withMessages([
+                    "grades.{$index}.marks_obtained" => ["Marks cannot exceed {$exam->total_marks}."],
+                ]);
+            }
+        }
+
+        DB::transaction(function () use ($validated, $exam) {
+            foreach ($validated['grades'] as $entry) {
                 $percentage = round(($entry['marks_obtained'] / $exam->total_marks) * 100, 1);
                 $letterGrade = $this->calculateLetterGrade($percentage);
 
                 Grade::updateOrCreate(
                     ['exam_id' => $exam->id, 'student_id' => $entry['student_id']],
                     [
+                        'class_id'       => $exam->class_id,
                         'marks_obtained' => $entry['marks_obtained'],
                         'total_marks'    => $exam->total_marks,
                         'percentage'     => $percentage,
@@ -136,12 +209,11 @@ class GradeController extends Controller
                 );
             }
 
-            $exam->update(['status' => 'completed']);
         });
 
         return response()->json([
             'success' => true,
-            'message' => 'Grades saved for ' . count($request->grades) . ' students.',
+            'message' => 'Marks saved for ' . count($validated['grades']) . ' students.',
         ]);
     }
 

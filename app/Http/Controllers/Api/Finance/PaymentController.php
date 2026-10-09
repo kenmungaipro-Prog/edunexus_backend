@@ -17,11 +17,29 @@ class PaymentController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $filters = $request->validate([
+            'student_id' => 'sometimes|integer|min:1',
+            'status' => ['nullable', Rule::in([
+                ...FinanceStatuses::allPaymentStatuses(),
+                'processing',
+                'suspicious',
+                'reconciled',
+            ])],
+            'method' => ['nullable', Rule::in(['cash', 'mpesa', 'bank_transfer', 'bank_deposit', 'card', 'cheque', 'online'])],
+            'month' => 'nullable|integer|between:1,12',
+            'year' => 'nullable|integer|between:2000,2100',
+            'search' => 'nullable|string|max:100',
+            'per_page' => 'sometimes|integer|between:1,100',
+        ]);
+
         $payments = Payment::with(['student.classRoom', 'receipt'])
             ->where('school_id', currentSchoolId())
-            ->when($request->student_id, fn($q) => $q->where('student_id', $request->student_id))
-            ->when($request->status, fn($q, $status) => $q->where('status', $status))
-            ->when($request->search, function ($query, $search) {
+            ->when($filters['student_id'] ?? null, fn($q, $studentId) => $q->where('student_id', $studentId))
+            ->when($filters['status'] ?? null, fn($q, $status) => $q->where('status', $status))
+            ->when($filters['method'] ?? null, fn($q, $method) => $q->where('payment_method', $method))
+            ->when($filters['month'] ?? null, fn($q, $month) => $q->whereMonth('payment_date', $month))
+            ->when($filters['year'] ?? null, fn($q, $year) => $q->whereYear('payment_date', $year))
+            ->when($filters['search'] ?? null, function ($query, $search) {
                 $query->where(function ($sub) use ($search) {
                     $sub->where('payment_number', 'like', "%{$search}%")
                         ->orWhere('reference_number', 'like', "%{$search}%")
@@ -30,7 +48,7 @@ class PaymentController extends Controller
             })
             ->orderByDesc('payment_date')
             ->orderByDesc('id')
-            ->paginate($request->per_page ?? 20);
+            ->paginate($filters['per_page'] ?? 20);
 
         return response()->json(['success' => true, 'data' => $payments]);
     }

@@ -8,6 +8,7 @@ namespace App\Exports;
 use App\Models\Attendance;
 use App\Models\Student;
 use Maatwebsite\Excel\Concerns\{FromArray, WithHeadings, WithStyles, ShouldAutoSize};
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 class AttendanceExport implements FromArray, WithHeadings, WithStyles, ShouldAutoSize
 {
@@ -66,4 +67,3 @@ class AttendanceExport implements FromArray, WithHeadings, WithStyles, ShouldAut
         return [1 => ['font' => ['bold' => true]]];
     }
 }
-

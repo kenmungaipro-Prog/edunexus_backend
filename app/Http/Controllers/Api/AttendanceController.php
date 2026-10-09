@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
+use App\Models\ClassRoom;
 use App\Models\Student;
 use App\Exports\AttendanceExport;
 use Illuminate\Http\JsonResponse;
@@ -15,16 +16,159 @@ class AttendanceController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        $validated = $request->validate([
+            'class_id'  => 'sometimes|nullable|integer|exists:class_rooms,id',
+            'date_from' => 'sometimes|nullable|date_format:Y-m-d',
+            'date_to'   => 'sometimes|nullable|date_format:Y-m-d|after_or_equal:date_from',
+            'date'      => 'sometimes|nullable|date_format:Y-m-d',
+            'month'     => 'sometimes|nullable|integer|between:1,12',
+            'year'      => 'sometimes|nullable|integer|between:2000,2100',
+            'status'    => 'sometimes|nullable|in:present,absent,late,holiday,excused',
+            'per_page'  => 'sometimes|nullable|integer|between:1,1000',
+        ]);
+
         $attendance = Attendance::with(['student', 'classRoom', 'markedBy'])
             ->where(fn ($q) => $q->whereHas('student', fn ($s) => $s->where('school_id', currentSchoolId())))
-            ->when($request->class_id, fn ($q, $v) => $q->where('class_id', $v))
-            ->when($request->date,     fn ($q, $v) => $q->whereDate('date', $v))
-            ->when($request->month,    fn ($q, $v) => $q->whereMonth('date', $v))
-            ->when($request->status,   fn ($q, $v) => $q->where('status', $v))
+            ->when($validated['class_id'] ?? null, fn ($q, $v) => $q->where('class_id', $v))
+            ->when($validated['date'] ?? null, fn ($q, $v) => $q->whereDate('date', $v))
+            ->when($validated['month'] ?? null, fn ($q, $v) => $q->whereMonth('date', $v))
+            ->when($validated['year'] ?? null, fn ($q, $v) => $q->whereYear('date', $v))
+            ->when($validated['date_from'] ?? null, fn ($q, $v) => $q->whereDate('date', '>=', $v))
+            ->when($validated['date_to'] ?? null, fn ($q, $v) => $q->whereDate('date', '<=', $v))
+            ->when($validated['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
             ->orderByDesc('date')
-            ->paginate($request->per_page ?? 50);
+            ->paginate($validated['per_page'] ?? 50);
 
         return response()->json(['success' => true, 'data' => $attendance]);
+    }
+
+    public function report(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'class_id'  => 'required|integer|exists:class_rooms,id',
+            'date_from' => 'required|date_format:Y-m-d',
+            'date_to'   => 'required|date_format:Y-m-d|after_or_equal:date_from',
+        ]);
+
+        $class = ClassRoom::query()
+            ->where('school_id', currentSchoolId())
+            ->findOrFail($validated['class_id']);
+
+        $baseQuery = Attendance::query()
+            ->where('class_id', $class->id)
+            ->whereBetween('date', [$validated['date_from'], $validated['date_to']])
+            ->whereHas('student', fn ($query) => $query->where('school_id', currentSchoolId()));
+
+        $countsByStudent = (clone $baseQuery)
+            ->selectRaw('student_id, status, COUNT(*) as total')
+            ->groupBy('student_id', 'status')
+            ->get()
+            ->groupBy('student_id');
+
+        $countsByDate = (clone $baseQuery)
+            ->selectRaw('date, status, COUNT(*) as total')
+            ->groupBy('date', 'status')
+            ->orderBy('date')
+            ->get()
+            ->groupBy(fn ($row) => substr((string) $row->date, 0, 10));
+
+        $attendanceStudentIds = $countsByStudent->keys()->all();
+        $students = Student::withTrashed()
+            ->where('school_id', currentSchoolId())
+            ->where(function ($query) use ($class, $attendanceStudentIds) {
+                $query->where('class_id', $class->id);
+                if ($attendanceStudentIds !== []) {
+                    $query->orWhereIn('id', $attendanceStudentIds);
+                }
+            })
+            ->orderBy('roll_number')
+            ->get(['id', 'roll_number', 'first_name', 'last_name'])
+            ->map(function (Student $student) use ($countsByStudent) {
+                $counts = [
+                    'present' => 0,
+                    'absent' => 0,
+                    'late' => 0,
+                    'holiday' => 0,
+                    'excused' => 0,
+                ];
+
+                foreach ($countsByStudent->get($student->id, collect()) as $row) {
+                    $counts[$row->status] = (int) $row->total;
+                }
+
+                $recordedDays = $counts['present'] + $counts['absent'] + $counts['late'];
+
+                return [
+                    'id' => $student->id,
+                    'roll_number' => $student->roll_number,
+                    'name' => $student->full_name,
+                    ...$counts,
+                    'recorded_days' => $recordedDays,
+                    'attendance_rate' => $recordedDays > 0
+                        ? round((($counts['present'] + $counts['late']) / $recordedDays) * 100, 1)
+                        : null,
+                ];
+            })
+            ->values();
+
+        $daily = $countsByDate->map(function ($rows, $date) {
+            $counts = [
+                'present' => 0,
+                'absent' => 0,
+                'late' => 0,
+                'holiday' => 0,
+                'excused' => 0,
+            ];
+
+            foreach ($rows as $row) {
+                $counts[$row->status] = (int) $row->total;
+            }
+
+            $recordedDays = $counts['present'] + $counts['absent'] + $counts['late'];
+
+            return [
+                'date' => $date,
+                ...$counts,
+                'records_count' => array_sum($counts),
+                'attendance_rate' => $recordedDays > 0
+                    ? round((($counts['present'] + $counts['late']) / $recordedDays) * 100, 1)
+                    : null,
+            ];
+        })->values();
+
+        $countsByStatus = (clone $baseQuery)
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->get()
+            ->keyBy('status');
+
+        $totals = [
+            'present' => (int) ($countsByStatus->get('present')->total ?? 0),
+            'absent' => (int) ($countsByStatus->get('absent')->total ?? 0),
+            'late' => (int) ($countsByStatus->get('late')->total ?? 0),
+            'holiday' => (int) ($countsByStatus->get('holiday')->total ?? 0),
+            'excused' => (int) ($countsByStatus->get('excused')->total ?? 0),
+        ];
+        $recordedDays = $totals['present'] + $totals['absent'] + $totals['late'];
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'class' => ['id' => $class->id, 'name' => $class->name],
+                'date_from' => $validated['date_from'],
+                'date_to' => $validated['date_to'],
+                'summary' => [
+                    ...$totals,
+                    'recorded_days' => $recordedDays,
+                    'students_count' => $students->count(),
+                    'attendance_rate' => $recordedDays > 0
+                        ? round((($totals['present'] + $totals['late']) / $recordedDays) * 100, 1)
+                        : null,
+                ],
+                'students' => $students,
+                'daily' => $daily,
+            ],
+        ]);
     }
 
     public function mark(Request $request): JsonResponse

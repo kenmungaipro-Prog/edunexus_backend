@@ -20,9 +20,10 @@ class ParentProfileController extends Controller
         $user = auth()->user();
 
         if ($user->isParent()) {
-            $profile = ParentProfile::with(['user', 'school', 'children'])
+            $profile = ParentProfile::with(['user', 'school'])
                 ->where('user_id', $user->id)
                 ->firstOrFail();
+            $profile->setRelation('children', $this->linkedStudents($profile));
 
             return response()->json([
                 'success' => true,
@@ -53,9 +54,53 @@ class ParentProfileController extends Controller
                       ->orWhere('relationship', 'like', "%{$value}%");
             }))
             ->when($request->status, fn($q, $value) => $q->whereHas('user', fn($u) => $u->where('status', $value)))
-            ->when($request->has_children === 'has', fn($q) => $q->has('children'))
-            ->when($request->has_children === 'none', fn($q) => $q->doesntHave('children'))
+            ->when($request->has_children === 'has', fn($q) => $q->whereExists(function ($students) {
+                $students->selectRaw('1')
+                    ->from('students')
+                    ->whereColumn('students.school_id', 'parent_profiles.school_id')
+                    ->whereNull('students.deleted_at')
+                    ->where(function ($links) {
+                        $links->whereColumn('students.parent_id', 'parent_profiles.user_id')
+                            ->orWhereColumn('students.secondary_parent_id', 'parent_profiles.user_id');
+                    });
+            }))
+            ->when($request->has_children === 'none', fn($q) => $q->whereNotExists(function ($students) {
+                $students->selectRaw('1')
+                    ->from('students')
+                    ->whereColumn('students.school_id', 'parent_profiles.school_id')
+                    ->whereNull('students.deleted_at')
+                    ->where(function ($links) {
+                        $links->whereColumn('students.parent_id', 'parent_profiles.user_id')
+                            ->orWhereColumn('students.secondary_parent_id', 'parent_profiles.user_id');
+                    });
+            }))
             ->paginate($request->per_page ?? 20);
+
+        $parentUserIds = $profiles->getCollection()->pluck('user_id')->map(fn ($id) => (int) $id)->all();
+        $linkedStudents = Student::query()
+            ->where('school_id', currentSchoolId())
+            ->where(function ($query) use ($parentUserIds) {
+                $query->whereIn('parent_id', $parentUserIds)
+                    ->orWhereIn('secondary_parent_id', $parentUserIds);
+            })
+            ->get(['id', 'parent_id', 'secondary_parent_id']);
+
+        $childrenCounts = [];
+        foreach ($linkedStudents as $student) {
+            foreach (array_unique(array_filter([
+                $student->parent_id,
+                $student->secondary_parent_id,
+            ])) as $parentUserId) {
+                $parentUserId = (int) $parentUserId;
+                if (in_array($parentUserId, $parentUserIds, true)) {
+                    $childrenCounts[$parentUserId] = ($childrenCounts[$parentUserId] ?? 0) + 1;
+                }
+            }
+        }
+
+        $profiles->getCollection()->each(function (ParentProfile $profile) use ($childrenCounts) {
+            $profile->setAttribute('children_count', $childrenCounts[(int) $profile->user_id] ?? 0);
+        });
 
         return response()->json(['success' => true, 'data' => $profiles]);
     }
@@ -74,13 +119,28 @@ class ParentProfileController extends Controller
             ->whereHas('user', fn($query) => $query->where('status', 'inactive'))
             ->count();
         $parentsWithNoChildren = ParentProfile::where('school_id', $schoolId)
-            ->doesntHave('children')
+            ->whereNotExists(function ($students) {
+                $students->selectRaw('1')
+                    ->from('students')
+                    ->whereColumn('students.school_id', 'parent_profiles.school_id')
+                    ->whereNull('students.deleted_at')
+                    ->where(function ($links) {
+                        $links->whereColumn('students.parent_id', 'parent_profiles.user_id')
+                            ->orWhereColumn('students.secondary_parent_id', 'parent_profiles.user_id');
+                    });
+            })
             ->count();
         $parentsWithMultipleChildren = ParentProfile::where('school_id', $schoolId)
-            ->has('children', '>', 1)
+            ->whereRaw('(SELECT COUNT(*) FROM students
+                WHERE students.school_id = parent_profiles.school_id
+                AND students.deleted_at IS NULL
+                AND (students.parent_id = parent_profiles.user_id
+                    OR students.secondary_parent_id = parent_profiles.user_id)) > 1')
             ->count();
         $totalChildren = Student::where('school_id', $schoolId)
-            ->whereNotNull('parent_id')
+            ->where(function ($query) {
+                $query->whereNotNull('parent_id')->orWhereNotNull('secondary_parent_id');
+            })
             ->count();
 
         $relationshipBreakdown = ParentProfile::where('school_id', $schoolId)
@@ -169,7 +229,10 @@ class ParentProfileController extends Controller
     {
         $this->authorizeParent($parent);
 
-        return response()->json(['success' => true, 'data' => $parent->load(['user', 'school', 'children'])]);
+        $parent->load(['user', 'school']);
+        $parent->setRelation('children', $this->linkedStudents($parent));
+
+        return response()->json(['success' => true, 'data' => $parent]);
     }
 
     public function update(Request $request, ParentProfile $parent): JsonResponse
@@ -206,7 +269,10 @@ class ParentProfileController extends Controller
             }
         });
 
-        return response()->json(['success' => true, 'message' => 'Parent profile updated.', 'data' => $parent->fresh(['user', 'school', 'children'])]);
+        $updatedParent = $parent->refresh()->load(['user', 'school']);
+        $updatedParent->setRelation('children', $this->linkedStudents($updatedParent));
+
+        return response()->json(['success' => true, 'message' => 'Parent profile updated.', 'data' => $updatedParent]);
     }
 
     private function generateFallbackEmail(string $name): string
@@ -235,11 +301,23 @@ class ParentProfileController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized.'], 403);
         }
 
-        $profile = ParentProfile::with(['user', 'school', 'children'])
+        $profile = ParentProfile::with(['user', 'school'])
             ->where('user_id', $user->id)
             ->firstOrFail();
+        $profile->setRelation('children', $this->linkedStudents($profile));
 
         return response()->json(['success' => true, 'data' => $profile]);
+    }
+
+    private function linkedStudents(ParentProfile $profile)
+    {
+        return Student::where('school_id', $profile->school_id)
+            ->where(function ($query) use ($profile) {
+                $query->where('parent_id', $profile->user_id)
+                    ->orWhere('secondary_parent_id', $profile->user_id);
+            })
+            ->with(['classRoom', 'parent', 'secondaryParent'])
+            ->get();
     }
 
     private function authorizeParent(ParentProfile $profile): void

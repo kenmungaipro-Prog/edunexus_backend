@@ -6,6 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\FeeRequest;
 use App\Models\Fee;
 use App\Models\FeeType;
+use App\Models\AcademicSession;
+use App\Models\FinanceStatuses;
+use App\Models\Invoice;
+use App\Models\Payment;
 use App\Models\Student;
 use App\Models\AuditLog;
 use App\Exports\FeesExport;
@@ -145,53 +149,69 @@ class FeeController extends Controller
     {
         $schoolId = currentSchoolId();
         $sessionId = currentSession();
-
-        \Illuminate\Support\Facades\Log::info('FeeController::summary debug', [
-            'school_id' => $schoolId,
-            'session_id' => $sessionId,
-            'fees_count' => \App\Models\Fee::count(),
-            'fees_for_school' => \App\Models\Fee::whereHas('student', fn($q) => $q->where('school_id', $schoolId))->where('session_id', $sessionId)->where('status', 'paid')->count(),
-        ]);
-
-        $totalStudents = Student::where('school_id', $schoolId)->where('status', 'active')->count();
-        $feeTypes      = FeeType::where('school_id', $schoolId)->get();
-        $totalBudget   = $feeTypes->sum('amount') * $totalStudents;
-
-        $collected = Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
+        $session = AcademicSession::where('school_id', $schoolId)
+            ->whereKey($sessionId)
+            ->first();
+        $invoiceQuery = Invoice::where('school_id', $schoolId)
             ->where('session_id', $sessionId)
-            ->where('status', 'paid')
-            ->sum('amount');
-
-        $pending = Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
-            ->where('session_id', $sessionId)
-            ->where('status', 'pending')
-            ->sum('amount');
-
-        $defaulters = Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
-            ->where('status', 'overdue')
-            ->distinct('student_id')
+            ->whereNotIn('status', FinanceStatuses::invoiceExcludedFromBalance());
+        $totalBudget = (float) (clone $invoiceQuery)->sum('total');
+        $appliedToInvoices = (float) (clone $invoiceQuery)->sum('amount_paid');
+        $outstanding = (float) (clone $invoiceQuery)
+            ->whereIn('status', FinanceStatuses::invoicePayableStatuses())
+            ->sum('balance');
+        $overdue = (float) (clone $invoiceQuery)
+            ->where('status', FinanceStatuses::INVOICE_OVERDUE)
+            ->where('balance', '>', 0)
+            ->sum('balance');
+        $defaulters = (clone $invoiceQuery)
+            ->where('status', FinanceStatuses::INVOICE_OVERDUE)
+            ->where('balance', '>', 0)
+            ->distinct()
             ->count('student_id');
+
+        $paymentQuery = Payment::where('school_id', $schoolId)
+            ->whereIn('status', FinanceStatuses::paymentSuccessStatuses());
+        if ($session) {
+            $paymentQuery->whereBetween('payment_date', [
+                $session->start_date->startOfDay(),
+                $session->end_date->endOfDay(),
+            ]);
+        } else {
+            $paymentQuery->whereYear('payment_date', now()->year);
+        }
+        $collected = (float) (clone $paymentQuery)->sum('amount');
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'total_budget'   => $totalBudget,
-                'total_collected'=> (float) $collected,
-                'total_pending'  => (float) $pending,
-                'defaulters'     => $defaulters,
-                'collection_rate'=> $totalBudget > 0 ? round(($collected / $totalBudget) * 100, 1) : 0,
-                'by_type'        => $this->collectionByType($schoolId, $sessionId),
-                'monthly'        => $this->monthlyCollection($schoolId),
+                'total_budget'    => $totalBudget,
+                'total_collected' => $collected,
+                'total_pending'   => $outstanding,
+                'overdue_balance' => $overdue,
+                'defaulters'      => $defaulters,
+                'collection_rate' => $totalBudget > 0 ? round(($appliedToInvoices / $totalBudget) * 100, 1) : 0,
+                'session_name'    => $session?->name ?? 'Current calendar year',
+                'by_type'         => $this->collectionByType($schoolId, $sessionId),
+                'monthly_year'    => now()->year,
+                'monthly'         => $this->monthlyCollection($schoolId, now()->year),
             ],
         ]);
     }
 
     public function defaulters(Request $request): JsonResponse
     {
-        $defaulters = Student::with('classRoom')
+        $sessionId = currentSession();
+        $defaulters = Student::with(['classRoom', 'parent'])
             ->where('school_id', currentSchoolId())
-            ->whereHas('fees', fn ($q) => $q->where('status', 'overdue'))
-            ->withSum(['fees as overdue_amount' => fn ($q) => $q->where('status', 'overdue')], 'amount')
+            ->whereHas('invoices', fn ($q) => $q
+                ->where('session_id', $sessionId)
+                ->where('status', FinanceStatuses::INVOICE_OVERDUE)
+                ->where('balance', '>', 0))
+            ->withSum(['invoices as overdue_amount' => fn ($q) => $q
+                ->where('session_id', $sessionId)
+                ->where('status', FinanceStatuses::INVOICE_OVERDUE)
+                ->where('balance', '>', 0)], 'balance')
             ->paginate($request->per_page ?? 20);
 
         return response()->json(['success' => true, 'data' => $defaulters]);
@@ -233,28 +253,40 @@ class FeeController extends Controller
 
     private function collectionByType(int $schoolId, int $sessionId): array
     {
-        return FeeType::where('school_id', $schoolId)
-            ->withSum(['fees as collected' => fn ($q) => $q->where('status', 'paid')->where('session_id', $sessionId)], 'amount')
-            ->get()
-            ->map(fn ($ft) => [
-                'type'      => $ft->name,
-                'amount'    => $ft->amount,
-                'collected' => (float) ($ft->collected ?? 0),
-                'rate'      => $ft->amount > 0 ? round(($ft->collected / $ft->amount) * 100, 1) : 0,
-            ])
-            ->toArray();
+        $categories = DB::table('invoice_items as items')
+            ->join('invoices', 'invoices.id', '=', 'items.invoice_id')
+            ->leftJoin('fee_categories', 'fee_categories.id', '=', 'items.fee_category_id')
+            ->where('invoices.school_id', $schoolId)
+            ->where('invoices.session_id', $sessionId)
+            ->whereNotIn('invoices.status', FinanceStatuses::invoiceExcludedFromBalance())
+            ->groupByRaw("COALESCE(fee_categories.name, items.description, 'Uncategorized')")
+            ->selectRaw("COALESCE(fee_categories.name, items.description, 'Uncategorized') as type")
+            ->selectRaw('SUM(items.total) as amount')
+            ->selectRaw('SUM(CASE WHEN invoices.total > 0 THEN items.total * LEAST(GREATEST(invoices.amount_paid, 0), invoices.total) / invoices.total ELSE 0 END) as collected')
+            ->get();
+
+        return $categories->map(fn ($category) => [
+            'type'      => $category->type,
+            'amount'    => (float) $category->amount,
+            'collected' => (float) $category->collected,
+            'rate'      => (float) $category->amount > 0
+                ? round(((float) $category->collected / (float) $category->amount) * 100, 1)
+                : 0,
+        ])->all();
     }
 
-    private function monthlyCollection(int $schoolId): array
+    private function monthlyCollection(int $schoolId, int $year): array
     {
-        return collect(range(1, 12))->map(fn ($m) => [
-            'month'     => now()->month($m)->format('M'),
-            'collected' => (float) Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
-                ->whereMonth('paid_at', $m)
-                ->where('status', 'paid')
-                ->sum('amount'),
-        ])->toArray();
+        $monthlyAmounts = Payment::where('school_id', $schoolId)
+            ->whereIn('status', FinanceStatuses::paymentSuccessStatuses())
+            ->whereYear('payment_date', $year)
+            ->selectRaw('MONTH(payment_date) as month_number, SUM(amount) as collected')
+            ->groupByRaw('MONTH(payment_date)')
+            ->pluck('collected', 'month_number');
+
+        return collect(range(1, 12))->map(fn ($month) => [
+            'month'     => now()->setDate($year, $month, 1)->format('M'),
+            'collected' => (float) ($monthlyAmounts[$month] ?? 0),
+        ])->all();
     }
 }
-
-
