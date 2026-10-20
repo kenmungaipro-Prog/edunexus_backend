@@ -17,6 +17,7 @@ class Vehicle extends Model
     protected $fillable = [
         'school_id',
         'registration_number',
+        'imei',
         'make',
         'model',
         'capacity',

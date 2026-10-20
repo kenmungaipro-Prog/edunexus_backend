@@ -168,7 +168,7 @@ class InvoiceController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => $invoice->load(['student.classRoom', 'invoiceItems.feeCategory'])
+            'data'    => $invoice->load(['student.classRoom', 'items.feeCategory'])
         ]);
     }
 

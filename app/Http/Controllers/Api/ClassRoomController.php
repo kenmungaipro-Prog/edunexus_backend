@@ -16,7 +16,11 @@ class ClassRoomController extends Controller
     public function index(): JsonResponse
     {
         $classes = ClassRoom::with(['classTeacher.user'])
-            ->withCount('students')
+            ->withCount([
+                'enrolledStudents as students_count',
+                'activeEnrolledStudents as active_students_count',
+                'inactiveEnrolledStudents as inactive_students_count',
+            ])
             ->orderBy('grade')
             ->orderBy('section')
             ->get();
@@ -63,9 +67,15 @@ class ClassRoomController extends Controller
 
     public function show(ClassRoom $class): JsonResponse
     {
+        $class->loadCount([
+            'enrolledStudents as students_count',
+            'activeEnrolledStudents as active_students_count',
+            'inactiveEnrolledStudents as inactive_students_count',
+        ]);
+
         return response()->json([
             'success' => true,
-            'data'    => $class->load(['students', 'classTeacher.user', 'subjects', 'timetableSlots']),
+            'data'    => $class->load(['classTeacher.user', 'subjects', 'timetableSlots']),
         ]);
     }
 

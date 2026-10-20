@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Validator;
 use App\Events\VehicleLocationUpdated;
 use App\Events\GeofenceTriggered;
 use App\Services\Transport\StopService;
@@ -33,7 +34,12 @@ class TransportController extends Controller
     public function index(): JsonResponse
     {
         $routes = TransportRoute::where('school_id', currentSchoolId())
-            ->with(['vehicle', 'driver', 'students'])
+            ->with([
+                'vehicle',
+                'driver',
+                'students',
+                'geofences' => fn ($query) => $query->where('active', true),
+            ])
             ->withCount('students')
             ->get();
 
@@ -53,22 +59,142 @@ class TransportController extends Controller
         $formatted = $vehicles->map(function ($vehicle) {
             $assignedRoute = $vehicle->currentRoute;
             
-            // Baseline Fallbacks centered on local Kenyan project coordinates if GPS telemetry fails
             return [
                 'vehicle_id' => $vehicle->id,
                 'number'     => $vehicle->registration_number,
                 'route'      => $assignedRoute ? $assignedRoute->name : null,
                 'driver'     => ($assignedRoute && $assignedRoute->driver) ? $assignedRoute->driver->name : null,
-                'lat'        => $vehicle->last_lat ?? -1.2825, 
-                'lng'        => $vehicle->last_lng ?? 36.8146,
-                'speed'      => $vehicle->last_speed ?? 0,
+                'lat'        => $vehicle->last_lat,
+                'lng'        => $vehicle->last_lng,
+                'speed'      => $vehicle->last_speed,
                 'updated_at' => $vehicle->location_updated_at 
                                     ? Carbon::parse($vehicle->location_updated_at)->toIso8601String() 
-                                    : now()->toIso8601String(),
+                                    : null,
             ];
         });
 
         return response()->json(['success' => true, 'data' => $formatted]);
+    }
+
+    public function receiveTraccar(Request $request)
+    {
+        $location = $request->input('location');
+        [$locationLat, $locationLng] = is_string($location)
+            ? array_pad(explode(',', $location, 2), 2, null)
+            : [null, null];
+
+        $validated = Validator::make([
+            'id' => $request->input('id', $request->input('deviceid')),
+            'lat' => $request->input('lat', $locationLat),
+            'lon' => $request->input('lon', $locationLng),
+            'timestamp' => $request->input('timestamp'),
+            'speed' => $request->input('speed'),
+            'bearing' => $request->input('bearing', $request->input('heading')),
+            'accuracy' => $request->input('accuracy'),
+            'valid' => $request->input('valid', 'true'),
+        ], [
+            'id' => 'required|string|max:32',
+            'lat' => 'required|numeric|between:-90,90',
+            'lon' => 'required|numeric|between:-180,180',
+            'timestamp' => 'nullable|string|max:40',
+            'speed' => 'nullable|numeric|min:0|max:400',
+            'bearing' => 'nullable|numeric|between:0,360',
+            'accuracy' => 'nullable|numeric|min:0|max:10000',
+            'valid' => ['required', Rule::in(['true', 'false', '1', '0', true, false, 1, 0])],
+        ])->validate();
+
+        if (! filter_var((string) $validated['valid'], FILTER_VALIDATE_BOOLEAN)) {
+            return response('OK', 200)->header('Content-Type', 'text/plain');
+        }
+
+        $vehicle = Vehicle::where('imei', $validated['id'])->first();
+        if (! $vehicle) {
+            return response('Unknown device identifier', 404)->header('Content-Type', 'text/plain');
+        }
+
+        $route = TransportRoute::where('vehicle_id', $vehicle->id)
+            ->where('school_id', $vehicle->school_id)
+            ->with('geofences')
+            ->first();
+        if (! $route) {
+            return response('Vehicle is not assigned to a transport route', 409)
+                ->header('Content-Type', 'text/plain');
+        }
+
+        try {
+            $recordedAt = $this->parseTraccarTimestamp($validated['timestamp'] ?? null);
+        } catch (\Throwable $exception) {
+            return response('Invalid timestamp', 422)->header('Content-Type', 'text/plain');
+        }
+
+        $lat = (float) $validated['lat'];
+        $lng = (float) $validated['lon'];
+        $speed = isset($validated['speed']) ? (int) round((float) $validated['speed'] * 1.852) : null;
+        $heading = isset($validated['bearing']) ? (float) $validated['bearing'] : null;
+        $accuracy = isset($validated['accuracy']) ? (float) $validated['accuracy'] : null;
+
+        VehicleTelemetry::create([
+            'vehicle_id' => $vehicle->id,
+            'lat' => $lat,
+            'lng' => $lng,
+            'speed' => $speed,
+            'recorded_at' => $recordedAt,
+        ]);
+
+        $isLatestLocation = ! $vehicle->location_updated_at
+            || $recordedAt->greaterThanOrEqualTo($vehicle->location_updated_at);
+
+        $activeTrip = TransportTrip::where('school_id', $route->school_id)
+            ->where('transport_route_id', $route->id)
+            ->where('vehicle_id', $vehicle->id)
+            ->where('status', TransportTrip::STATUS_IN_PROGRESS)
+            ->first();
+
+        if ($activeTrip) {
+            TripLocation::create([
+                'transport_trip_id' => $activeTrip->id,
+                'lat' => $lat,
+                'lng' => $lng,
+                'speed' => $speed,
+                'heading' => $heading,
+                'accuracy' => $accuracy,
+                'recorded_at' => $recordedAt,
+            ]);
+        }
+
+        if ($isLatestLocation) {
+            $vehicle->update([
+                'last_lat' => $lat,
+                'last_lng' => $lng,
+                'last_speed' => $speed,
+                'location_updated_at' => $recordedAt,
+            ]);
+
+            $this->checkGeofenceTriggers($route, $vehicle, $lat, $lng);
+            $this->checkOffRoute($route, $vehicle, $lat, $lng);
+
+            $vehicle->load(['currentRoute.driver']);
+            broadcast(new VehicleLocationUpdated($vehicle));
+        }
+
+        return response('OK', 200)->header('Content-Type', 'text/plain');
+    }
+
+    private function parseTraccarTimestamp(?string $timestamp): Carbon
+    {
+        if ($timestamp === null || trim($timestamp) === '') {
+            return now();
+        }
+
+        if (is_numeric($timestamp)) {
+            $value = (float) $timestamp;
+
+            return $value >= 100000000000
+                ? Carbon::createFromTimestampMs((int) $value, 'UTC')
+                : Carbon::createFromTimestamp((int) $value, 'UTC');
+        }
+
+        return Carbon::parse($timestamp)->utc();
     }
 
     public function telemetryHistory(Request $request, $id): JsonResponse
@@ -391,7 +517,7 @@ class TransportController extends Controller
         ]]);
     }
 
-    private function resolveDriverOrAdminRoute($user): ?TransportRoute
+    private function resolveDriverOrAdminRoute($user, ?int $routeId = null): ?TransportRoute
     {
         if (! $user) {
             return null;
@@ -401,12 +527,14 @@ class TransportController extends Controller
             return TransportRoute::with(['vehicle', 'driver', 'students', 'geofences'])
                 ->where('school_id', currentSchoolId())
                 ->where('driver_id', $user->driver->id)
+                ->when($routeId, fn ($query) => $query->whereKey($routeId))
                 ->first();
         }
 
         if ($user->isAdmin() || $user->isSuperAdmin()) {
             return TransportRoute::with(['vehicle', 'driver', 'students', 'geofences'])
                 ->where('school_id', currentSchoolId())
+                ->when($routeId, fn ($query) => $query->whereKey($routeId))
                 ->orderBy('id')
                 ->first();
         }
@@ -416,18 +544,18 @@ class TransportController extends Controller
 
     public function transportAnalyticsOverview(Request $request): JsonResponse
     {
+        $filters = $request->validate([
+            'date' => ['sometimes', 'required', 'date_format:Y-m-d'],
+            'route_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
+        ]);
         $user = auth()->user();
-        $route = $this->resolveDriverOrAdminRoute($user);
+        $route = $this->resolveDriverOrAdminRoute($user, isset($filters['route_id']) ? (int) $filters['route_id'] : null);
 
         if (! $route) {
             return response()->json(['success' => true, 'data' => null]);
         }
 
-        if (! $route) {
-            return response()->json(['success' => true, 'data' => null]);
-        }
-
-        $date = $this->parseAnalyticsDate($request);
+        $date = $filters['date'] ?? now()->toDateString();
         $telemetry = VehicleTelemetry::where('vehicle_id', $route->vehicle_id)
             ->whereDate('recorded_at', $date)
             ->orderBy('recorded_at')
@@ -440,15 +568,24 @@ class TransportController extends Controller
         $metrics = $this->buildRouteTelemetryMetrics($telemetry);
         $efficiencyScore = $this->calculateEfficiencyScore($metrics);
 
-        $stopCount = $route->geofences->count();
-        $completedStops = $events->where('event_type', 'enter')->count();
-        $completionPct = $stopCount > 0 ? round(($completedStops / $stopCount) * 100, 1) : 0.0;
+        $activeGeofences = $route->geofences->where('active', true);
+        $activeGeofenceIds = $activeGeofences->modelKeys();
+        $stopCount = $activeGeofences->count();
+        $completedStops = $events
+            ->where('event_type', 'enter')
+            ->whereIn('transport_geofence_id', $activeGeofenceIds)
+            ->pluck('transport_geofence_id')
+            ->unique()
+            ->count();
+        $completionPct = $stopCount > 0 ? round(min(100, ($completedStops / $stopCount) * 100), 1) : null;
 
         return response()->json(['success' => true, 'data' => [
             'route_id' => $route->id,
             'route_name' => $route->name,
             'vehicle' => $route->vehicle?->registration_number,
             'driver_name' => $route->driver?->name,
+            'students_count' => $route->students->count(),
+            'students_count' => $route->students->count(),
             'date' => $date,
             'metrics' => $metrics,
             'efficiency_score' => $efficiencyScore,
@@ -461,10 +598,22 @@ class TransportController extends Controller
 
     public function transportDriverRanking(Request $request): JsonResponse
     {
-        $date = $this->parseAnalyticsDate($request);
-        $routes = TransportRoute::with(['driver', 'vehicle'])
-            ->where('school_id', currentSchoolId())
-            ->get();
+        $filters = $request->validate([
+            'date' => ['sometimes', 'required', 'date_format:Y-m-d'],
+        ]);
+        $date = $filters['date'] ?? now()->toDateString();
+        $routesQuery = TransportRoute::with(['driver', 'vehicle'])
+            ->where('school_id', currentSchoolId());
+
+        $user = auth()->user();
+        if ($user?->isDriver()) {
+            if (! $user->driver) {
+                return response()->json(['success' => true, 'data' => []]);
+            }
+            $routesQuery->where('driver_id', $user->driver->id);
+        }
+
+        $routes = $routesQuery->get();
 
         $driverRoutes = $routes->groupBy('driver_id');
         $vehicleIds = $routes->pluck('vehicle_id')->filter()->unique()->values()->all();
@@ -497,7 +646,9 @@ class TransportController extends Controller
                 'driver_name' => $driver?->name,
                 'routes' => $routeSummaries->values(),
                 'route_count' => $routeSummaries->count(),
-                'average_efficiency' => round($routeSummaries->avg(fn ($item) => $item['efficiency_score'] ?? 0), 1),
+                'average_efficiency' => $routeSummaries->pluck('efficiency_score')->filter(fn ($score) => $score !== null)->isNotEmpty()
+                    ? round($routeSummaries->pluck('efficiency_score')->filter(fn ($score) => $score !== null)->avg(), 1)
+                    : null,
                 'total_distance_km' => round($routeSummaries->sum(fn ($item) => $item['distance_km'] ?? 0), 1),
             ];
         })->sortByDesc('average_efficiency')->values();
@@ -507,14 +658,18 @@ class TransportController extends Controller
 
     public function transportHeatMap(Request $request): JsonResponse
     {
+        $filters = $request->validate([
+            'date' => ['sometimes', 'required', 'date_format:Y-m-d'],
+            'route_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
+        ]);
         $user = auth()->user();
-        $route = $this->resolveDriverOrAdminRoute($user);
+        $route = $this->resolveDriverOrAdminRoute($user, isset($filters['route_id']) ? (int) $filters['route_id'] : null);
 
         if (! $route) {
             return response()->json(['success' => true, 'data' => ['points' => []]]);
         }
 
-        $date = $this->parseAnalyticsDate($request);
+        $date = $filters['date'] ?? now()->toDateString();
         $telemetry = VehicleTelemetry::where('vehicle_id', $route->vehicle_id)
             ->whereDate('recorded_at', $date)
             ->orderBy('recorded_at')
@@ -540,18 +695,26 @@ class TransportController extends Controller
 
     public function transportAnalyticsPrediction(Request $request): JsonResponse
     {
+        $filters = $request->validate([
+            'date' => ['sometimes', 'required', 'date_format:Y-m-d'],
+            'route_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
+        ]);
         $user = auth()->user();
-        $route = $this->resolveDriverOrAdminRoute($user);
+        $route = $this->resolveDriverOrAdminRoute($user, isset($filters['route_id']) ? (int) $filters['route_id'] : null);
 
         if (! $route) {
             return response()->json(['success' => true, 'data' => null]);
         }
 
-        $date = $this->parseAnalyticsDate($request);
+        $date = $filters['date'] ?? now()->toDateString();
         $telemetry = VehicleTelemetry::where('vehicle_id', $route->vehicle_id)
             ->whereDate('recorded_at', $date)
             ->orderBy('recorded_at')
             ->get();
+
+        if ($telemetry->count() < 3) {
+            return response()->json(['success' => true, 'data' => null]);
+        }
 
         $events = GeofenceEvent::where('transport_route_id', $route->id)
             ->whereDate('triggered_at', $date)
@@ -559,16 +722,6 @@ class TransportController extends Controller
             ->get();
 
         $metrics = $this->buildRouteTelemetryMetrics($telemetry);
-
-            \Log::info('TRANSPORT PREDICTION DEBUG', [
-            'metrics' => $metrics,
-            'events' => $events->map(fn ($event) => [
-                'triggered_at' => $event->triggered_at,
-                'payload' => $event->payload,
-            ])->toArray(),
-            'route_stops' => $route->stops,
-            'timezone' => now()->getTimezone()->getName(),
-        ]);
 
         $prediction = $this->buildRouteDelayPrediction($route, $telemetry, $events, $metrics);
 
@@ -578,10 +731,14 @@ class TransportController extends Controller
     private function buildRouteDelayPrediction(TransportRoute $route, $telemetry, $events, array $metrics): array
     {
         $baseDelay = $this->calculateAverageStopDelay($route, $events);
-        $speedPenalty = max(0, 25 - $metrics['average_speed']) * 0.23;
+        $speedPenalty = $metrics['average_speed'] === null
+            ? 0
+            : max(0, 25 - $metrics['average_speed']) * 0.23;
         $idlePenalty = $metrics['idle_minutes'] * 1.0;
         $predictedDelay = max(0, (int) round($baseDelay + $speedPenalty + $idlePenalty));
-        $confidence = max(30, min(95, 100 - ($predictedDelay * 2)));
+        $confidence = $metrics['telemetry_points'] >= 30
+            ? 75
+            : ($metrics['telemetry_points'] >= 10 ? 55 : 35);
 
         if ($predictedDelay <= 5) {
             $status = 'On track';
@@ -693,20 +850,59 @@ class TransportController extends Controller
 
     private function buildRouteTelemetryMetrics($telemetry): array
     {
+        $telemetry = $telemetry->sortBy('recorded_at')->values();
         $count = $telemetry->count();
-        $averageSpeed = $count > 0 ? round($telemetry->avg('speed'), 1) : 0.0;
-        $maxSpeed = $count > 0 ? (int) $telemetry->max('speed') : 0;
-        $distanceKm = $this->calculateTelemetryDistanceKm($telemetry);
+        $distanceKm = 0.0;
         $idleSeconds = 0;
+        $weightedSpeed = 0.0;
+        $weightedSeconds = 0;
+        $validSpeedIntervals = 0;
+        $maxSpeed = 0;
 
-        for ($i = 0; $i < $count - 1; $i++) {
+        for ($i = 0; $i < $count; $i++) {
+            $speed = $telemetry[$i]->speed;
+            if ($speed !== null && $speed >= 0 && $speed <= 160) {
+                $maxSpeed = max($maxSpeed, (int) $speed);
+            }
+
+            if ($i === $count - 1) {
+                continue;
+            }
+
             $current = $telemetry[$i];
             $next = $telemetry[$i + 1];
-            $deltaSeconds = Carbon::parse($next->recorded_at)->diffInSeconds(Carbon::parse($current->recorded_at));
-            if ($current->speed !== null && $current->speed < 5 && $deltaSeconds > 0) {
-                $idleSeconds += $deltaSeconds;
+            $deltaSeconds = Carbon::parse($current->recorded_at)
+                ->diffInSeconds(Carbon::parse($next->recorded_at), false);
+
+            if ($deltaSeconds <= 0 || $deltaSeconds > 300) {
+                continue;
+            }
+
+            if ($speed !== null && $speed >= 0 && $speed <= 160) {
+                $weightedSpeed += $speed * $deltaSeconds;
+                $weightedSeconds += $deltaSeconds;
+                $validSpeedIntervals++;
+                if ($speed < 5) {
+                    $idleSeconds += $deltaSeconds;
+                }
+            }
+
+            $segmentDistanceKm = $this->calculateDistance(
+                (float) $current->lat,
+                (float) $current->lng,
+                (float) $next->lat,
+                (float) $next->lng
+            ) / 1000;
+            $segmentSpeedKmh = $segmentDistanceKm * 3600 / $deltaSeconds;
+
+            if ($segmentDistanceKm >= 0.01 && $segmentSpeedKmh <= 160) {
+                $distanceKm += $segmentDistanceKm;
             }
         }
+
+        $averageSpeed = $weightedSeconds > 0
+            ? round($weightedSpeed / $weightedSeconds, 1)
+            : null;
 
         return [
             'telemetry_points' => $count,
@@ -714,25 +910,16 @@ class TransportController extends Controller
             'max_speed' => $maxSpeed,
             'distance_km' => round($distanceKm, 2),
             'idle_minutes' => (int) round($idleSeconds / 60),
+            'valid_speed_intervals' => $validSpeedIntervals,
         ];
     }
 
-    private function calculateTelemetryDistanceKm($telemetry): float
+    private function calculateEfficiencyScore(array $metrics): ?int
     {
-        $distance = 0.0;
-        $count = $telemetry->count();
-
-        for ($i = 0; $i < $count - 1; $i++) {
-            $a = $telemetry[$i];
-            $b = $telemetry[$i + 1];
-            $distance += $this->calculateDistance((float) $a->lat, (float) $a->lng, (float) $b->lat, (float) $b->lng) / 1000;
+        if ($metrics['valid_speed_intervals'] === 0) {
+            return null;
         }
 
-        return $distance;
-    }
-
-    private function calculateEfficiencyScore(array $metrics): int
-    {
         $score = 100;
         $score -= min(40, $metrics['idle_minutes'] * 1.2);
         $score -= $metrics['average_speed'] < 25 ? 15 : 0;

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\{TimetableSlot, ClassRoom, Subject, Teacher, Book, BookIssue, Route, Event, Message, User};
+use App\Notifications\EventCreatedNotification;
 use Illuminate\Http\{JsonResponse, Request};
 use Illuminate\Support\Facades\DB;
 
@@ -36,11 +37,23 @@ class EventController extends Controller
             'notify_all'  => 'boolean',
         ]);
 
-        $event = Event::create([
-            ...$validated,
-            'school_id'  => currentSchoolId(),
-            'created_by' => auth()->id(),
-        ]);
+        $event = DB::transaction(function () use ($validated, $request) {
+            $event = Event::create([
+                ...$validated,
+                'school_id'  => currentSchoolId(),
+                'created_by' => auth()->id(),
+            ]);
+
+            $recipients = $event->notify_all
+                ? User::where('school_id', $event->school_id)->where('status', 'active')->get()
+                : collect([$request->user()]);
+
+            foreach ($recipients as $recipient) {
+                $recipient->notify(new EventCreatedNotification($event));
+            }
+
+            return $event;
+        });
 
         return response()->json(['success' => true, 'data' => $event], 201);
     }

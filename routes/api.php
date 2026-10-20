@@ -55,6 +55,10 @@ Route::prefix('v1')->group(function () {
 
     Route::post('/auth/login',   [AuthController::class, 'login']);
 
+    // Traccar Client OsmAnd-compatible location receiver; device IDs are matched to registered vehicle IMEIs.
+    Route::match(['get', 'post'], '/transport/traccar', [TransportController::class, 'receiveTraccar'])
+        ->middleware('throttle:120,1');
+
     // M-Pesa Webhooks (outside auth middleware)
     Route::prefix('payments/mpesa')->group(function () {
         Route::post('stk-callback', [MpesaController::class, 'stkCallback'])->name('api.mpesa.stk-callback');
@@ -293,11 +297,15 @@ Route::prefix('v1')->group(function () {
         });
 
         // ── Events ─────────────────────────────────────────────
+        Route::get('notifications/event-unread-count', [\App\Http\Controllers\Api\EventNotificationController::class, 'unreadCount']);
+        Route::post('notifications/events/read', [\App\Http\Controllers\Api\EventNotificationController::class, 'markEventsRead']);
         Route::apiResource('events', EventController::class);
 
         // ── Messages ───────────────────────────────────────────
         Route::prefix('messages')->group(function () {
             Route::get('/',         [MessageController::class, 'index']);
+            Route::get('/contacts', [MessageController::class, 'contacts']);
+            Route::get('/unread-count', [MessageController::class, 'unreadCount']);
             Route::post('/',        [MessageController::class, 'store']);
             Route::get('/{user}',   [MessageController::class, 'show']);
         });

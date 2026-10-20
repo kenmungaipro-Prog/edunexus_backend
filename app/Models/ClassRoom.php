@@ -51,6 +51,27 @@ class ClassRoom extends Model
         return $this->hasMany(Student::class, 'class_id');
     }
 
+    public function enrolledStudents(): HasMany
+    {
+        return $this->students()
+            ->whereIn('students.status', ['active', 'inactive'])
+            ->whereColumn('students.school_id', 'class_rooms.school_id');
+    }
+
+    public function activeEnrolledStudents(): HasMany
+    {
+        return $this->students()
+            ->where('students.status', 'active')
+            ->whereColumn('students.school_id', 'class_rooms.school_id');
+    }
+
+    public function inactiveEnrolledStudents(): HasMany
+    {
+        return $this->students()
+            ->where('students.status', 'inactive')
+            ->whereColumn('students.school_id', 'class_rooms.school_id');
+    }
+
     public function subjects(): BelongsToMany
     {
         return $this->belongsToMany(Subject::class, 'class_subjects', 'class_id', 'subject_id');

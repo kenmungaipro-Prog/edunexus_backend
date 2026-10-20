@@ -19,15 +19,21 @@ class PaymentReconciliationController extends Controller
     ) {}
 
     /**
-     * List all suspense account items (unmatched M-Pesa payments).
+     * List reconciliation items, including linked EduNexus receipts when resolved.
      */
     public function index(Request $request): JsonResponse
     {
         $items = DB::table('payment_reconciliation_items')
-            ->where('school_id', $request->user()->school_id)
-            ->when($request->status, fn($q, $status) => $q->where('status', $status))
-            ->orderByRaw("FIELD(status, 'unmatched', 'resolved', 'refunded')")
-            ->orderByDesc('created_at')
+            ->leftJoin('receipts', 'receipts.payment_id', '=', 'payment_reconciliation_items.payment_id')
+            ->where('payment_reconciliation_items.school_id', $request->user()->school_id)
+            ->when($request->status, fn($q, $status) => $q->where('payment_reconciliation_items.status', $status))
+            ->select(
+                'payment_reconciliation_items.*',
+                'receipts.id as receipt_id',
+                'receipts.receipt_number'
+            )
+            ->orderByRaw("FIELD(payment_reconciliation_items.status, 'unmatched', 'resolved', 'refunded')")
+            ->orderByDesc('payment_reconciliation_items.created_at')
             ->paginate($request->per_page ?? 20);
 
         return response()->json([

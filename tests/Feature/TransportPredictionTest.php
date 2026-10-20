@@ -110,10 +110,41 @@ test('driver receives transport prediction for assigned route', function () {
     $response->assertStatus(200)
         ->assertJsonPath('success', true)
         ->assertJsonPath('data.route_id', $route->id)
-        ->assertJsonPath('data.status', 'Minor delay')
-        ->assertJsonPath('data.predicted_delay_minutes', 15)
-        ->assertJsonPath('data.basis.average_speed', 3.3)
+    ->assertJsonPath('data.status', 'Delayed')
+    ->assertJsonPath('data.predicted_delay_minutes', 20)
+    ->assertJsonPath('data.basis.average_speed', 5)
         ->assertJsonPath('data.basis.stop_delay', 10);
+
+    GeofenceEvent::create([
+    'school_id' => $school->id,
+    'transport_route_id' => $route->id,
+    'transport_geofence_id' => $geofence->id,
+    'vehicle_id' => $vehicle->id,
+    'event_type' => 'enter',
+    'lat' => -1.2820,
+    'lng' => 36.8180,
+    'triggered_at' => Carbon::parse('2026-07-29 08:11:00'),
+    'payload' => ['stop_name' => 'Main Stop', 'stop_type' => 'Pickup'],
+    ]);
+
+    TransportGeofence::create([
+    'school_id' => $school->id,
+    'transport_route_id' => $route->id,
+    'stop_name' => 'Inactive Stop',
+    'stop_type' => 'Drop',
+    'lat' => -1.2830,
+    'lng' => 36.8190,
+    'radius_meters' => 120,
+    'active' => false,
+    ]);
+
+    $this->actingAs($user)
+    ->getJson('/api/v1/transport/analytics/overview?date=2026-07-29&route_id='.$route->id)
+    ->assertStatus(200)
+    ->assertJsonPath('data.stop_count', 1)
+    ->assertJsonPath('data.completed_stops', 1)
+    ->assertJsonPath('data.completion_pct', 100)
+    ->assertJsonPath('data.students_count', 0);
 });
 
 test('driver prediction endpoint rejects non-driver users', function () {

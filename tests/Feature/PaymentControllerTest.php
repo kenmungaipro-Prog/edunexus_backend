@@ -6,6 +6,7 @@ use App\Models\AcademicSession;
 use App\Models\ClassRoom;
 use App\Models\FinanceStatuses;
 use App\Models\Invoice;
+use App\Models\InvoiceItem;
 use App\Models\Payment;
 use App\Models\School;
 use App\Models\Student;
@@ -140,6 +141,24 @@ class PaymentControllerTest extends TestCase
         $this->invoice->refresh();
         $this->assertSame('100.00', number_format($this->invoice->balance, 2, '.', ''));
         $this->assertSame('100.00', number_format($this->invoice->amount_paid, 2, '.', ''));
+    }
+
+    public function test_invoice_detail_returns_line_items_using_the_frontend_items_key()
+    {
+        InvoiceItem::create([
+            'invoice_id' => $this->invoice->id,
+            'description' => 'Tuition',
+            'quantity' => 1,
+            'unit_price' => 200,
+            'discount_amount' => 0,
+            'total' => 200,
+        ]);
+
+        $this->actingAs($this->accountant)
+            ->getJson("/api/v1/finance/invoices/{$this->invoice->id}")
+            ->assertOk()
+            ->assertJsonPath('data.items.0.description', 'Tuition')
+            ->assertJsonPath('data.items.0.total', '200.00');
     }
 
     public function test_accountant_can_retrieve_payment_receipt()

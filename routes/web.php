@@ -2,21 +2,12 @@
 
 use Illuminate\Support\Facades\Route;
 
-// Ensure root path serves the SPA index for tests expecting GET /
-Route::get('/', function () {
+// Serve the compiled React Router SPA for direct browser navigations.
+$serveSpa = function (?string $any = null) {
     return response()->file(public_path('index.html'));
-});
+};
 
-// Named SPA auth routes for Laravel helpers/middleware.
-Route::view('/login', 'app')->name('login');
-Route::view('/register', 'app')->name('register');
-
-Route::view('/{any}', 'app')
-    ->where('any', '(?!api(?:/|$)).*');
-
-
-
-
-Route::get('/{any?}', function () {
-    return response()->file(public_path('index.html'));
-})->where('any', '(?!api(?:/|$)).*');
+Route::get('/', $serveSpa);
+Route::get('/login', $serveSpa)->name('login');
+Route::get('/register', $serveSpa)->name('register');
+Route::get('/{any}', $serveSpa)->where('any', '(?!api(?:/|$)).*');

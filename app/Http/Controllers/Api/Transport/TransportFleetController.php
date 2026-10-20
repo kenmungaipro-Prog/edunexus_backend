@@ -34,6 +34,7 @@ class TransportFleetController extends Controller
     {
         $validated = $request->validate([
             'registration_number' => 'required|string|unique:vehicles',
+            'imei' => 'nullable|string|max:32|unique:vehicles,imei',
             'make' => 'nullable|string',
             'model' => 'nullable|string',
             'capacity' => 'required|integer|min:1',
@@ -62,6 +63,7 @@ class TransportFleetController extends Controller
 
         $validated = $request->validate([
             'registration_number' => "sometimes|required|string|unique:vehicles,registration_number,{$vehicle->id}",
+            'imei' => ['nullable', 'string', 'max:32', Rule::unique('vehicles', 'imei')->ignore($vehicle->id)],
             'make' => 'nullable|string',
             'model' => 'nullable|string',
             'capacity' => 'sometimes|required|integer|min:1',

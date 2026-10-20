@@ -8,6 +8,8 @@ use App\Models\Student;
 use App\Models\ParentProfile;
 use App\Models\User;
 use App\Models\AcademicSession;
+use App\Models\Invoice;
+use App\Models\Payment;
 use App\Imports\StudentsImport;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -215,10 +217,24 @@ class StudentController extends Controller
             ->orderByDesc('created_at')
             ->get();
 
+        $invoices = Invoice::where('school_id', currentSchoolId())
+            ->where('student_id', $student->id)
+            ->orderByDesc('created_at')
+            ->get();
+
+        $payments = Payment::with(['allocations.invoice', 'receipt'])
+            ->where('school_id', currentSchoolId())
+            ->where('student_id', $student->id)
+            ->orderByDesc('payment_date')
+            ->orderByDesc('id')
+            ->get();
+
         return response()->json([
             'success' => true,
             'data'    => [
                 'fees'         => $fees,
+                'invoices'     => $invoices,
+                'payments'     => $payments,
                 'total_paid'   => $fees->where('status', 'paid')->sum('amount'),
                 'total_pending'=> $fees->where('status', 'pending')->sum('amount'),
                 'total_overdue'=> $fees->where('status', 'overdue')->sum('amount'),
