@@ -9,11 +9,13 @@ use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
-        channels: __DIR__.'/../routes/channels.php',
         api: __DIR__ . '/../routes/api.php',
         web: __DIR__ . '/../routes/web.php',
         apiPrefix: 'api',
     )
+    ->withBroadcasting(__DIR__.'/../routes/channels.php', [
+        'middleware' => ['api', 'auth:sanctum'],
+    ])
     ->withMiddleware(function (Middleware $middleware) {
 
         // JSON responses for API

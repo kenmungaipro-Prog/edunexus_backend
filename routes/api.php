@@ -35,16 +35,10 @@ use App\Http\Controllers\Api\Transport\TransportAssignmentController;
 use App\Http\Controllers\Api\Transport\TransportController;
 use App\Http\Controllers\Api\Transport\TransportFleetController;
 use App\Http\Controllers\Api\Transport\TransportTripController;
+use App\Http\Controllers\Api\Transport\TransportDemoController;
 
 
-Route::post('/debug-419', function (\Illuminate\Http\Request $request) {
-    return response()->json([
-        'session_id'        => session()->getId(),
-        'csrf_token'        => csrf_token(),
-        'middleware'        => app(\Illuminate\Routing\Router::class)->getMiddleware(),
-        'all_headers'       => $request->headers->all(),
-    ]);
-});
+
     // NOTE: M-Pesa webhook routes will be registered inside the `v1` group below
     // but remain outside the auth middleware so Safaricom can POST without tokens.
 
@@ -55,8 +49,8 @@ Route::prefix('v1')->group(function () {
 
     Route::post('/auth/login',   [AuthController::class, 'login']);
 
-    // Traccar Client OsmAnd-compatible location receiver; device IDs are matched to registered vehicle IMEIs.
-    Route::match(['get', 'post'], '/transport/traccar', [TransportController::class, 'receiveTraccar'])
+    // Configure a strong bearer token and require HTTPS at the public ingress.
+    Route::post('/transport/traccar', [TransportController::class, 'receiveTraccar'])
         ->middleware('throttle:120,1');
 
     // M-Pesa Webhooks (outside auth middleware)
@@ -241,6 +235,16 @@ Route::prefix('v1')->group(function () {
 
         // ── Transport ──────────────────────────────────────────
         Route::prefix('transport')->group(function () {
+            Route::middleware('role:admin,superadmin')->group(function () {
+                Route::get('/demo-target', [TransportDemoController::class, 'target']);
+                Route::get('/demo-session', [TransportDemoController::class, 'active']);
+                Route::post('/vehicles/{vehicle}/demo-session/start', [TransportDemoController::class, 'start'])
+                    ->whereNumber('vehicle');
+                Route::post('/vehicles/{vehicle}/demo-session/position', [TransportDemoController::class, 'updatePosition'])
+                    ->whereNumber('vehicle');
+                Route::post('/vehicles/{vehicle}/demo-session/stop', [TransportDemoController::class, 'stop'])
+                    ->whereNumber('vehicle');
+            });
             Route::get('/vehicles',                     [TransportFleetController::class, 'vehicles']);
             Route::post('/vehicles',                    [TransportFleetController::class, 'storeVehicle']);
             Route::get('/vehicles/{vehicle}',           [TransportFleetController::class, 'showVehicle']);

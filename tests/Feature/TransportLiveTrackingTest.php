@@ -1,25 +1,23 @@
 <?php
 
 use App\Events\VehicleLocationUpdated;
+use App\Events\GeofenceTriggered;
 use App\Models\Driver;
+use App\Models\GeofenceEvent;
 use App\Models\School;
+use App\Models\Transport\TransportGeofence;
 use App\Models\Transport\TransportRoute;
+use App\Models\Transport\TransportTrip;
+use App\Models\Transport\TripLocation;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleTelemetry;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Broadcast;
 use Carbon\Carbon;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Support\Facades\Event;
-use App\Models\GeofenceEvent;
-use App\Models\Transport\TransportGeofence;
-use App\Models\Transport\TransportTrip;
-use App\Models\Transport\TripLocation;
-
-
 
 uses(RefreshDatabase::class);
-
 
 function createLiveTrackingDriverContext(): array
 {
@@ -232,7 +230,8 @@ test('telemetry update dispatches VehicleLocationUpdated event', function () {
                 && $event->vehicle['driver'] === 'Live Tracking Driver'
                 && (float) $event->vehicle['lat'] === -1.2825
                 && (float) $event->vehicle['lng'] === 36.8146
-                && (int) $event->vehicle['speed'] === 35;
+                && (int) $event->vehicle['speed'] === 35
+                && $event->vehicle['demo'] === null;
         }
     );
 });
@@ -672,7 +671,7 @@ test('driver geofence events endpoint excludes events from another route', funct
         ],
         'monthly_fee' => 0,
     ]);
-        $otherGeofence = TransportGeofence::create([
+    $otherGeofence = TransportGeofence::create([
         'school_id' => $context['school']->id,
         'transport_route_id' => $otherRoute->id,
         'stop_name' => 'Other Stop',
@@ -684,19 +683,19 @@ test('driver geofence events endpoint excludes events from another route', funct
     ]);
 
     GeofenceEvent::create([
-    'school_id' => $context['school']->id,
-    'transport_route_id' => $otherRoute->id,
-    'transport_geofence_id' => $otherGeofence->id,
-    'vehicle_id' => $otherVehicle->id,
-    'event_type' => 'enter',
-    'lat' => -1.2825,
-    'lng' => 36.8146,
-    'triggered_at' => Carbon::parse('2026-08-09 08:10:00'),
-    'payload' => [
-        'stop_name' => 'Main Stop',
-        'stop_type' => 'Pickup',
-    ],
-]);
+        'school_id' => $context['school']->id,
+        'transport_route_id' => $otherRoute->id,
+        'transport_geofence_id' => $otherGeofence->id,
+        'vehicle_id' => $otherVehicle->id,
+        'event_type' => 'enter',
+        'lat' => -1.2825,
+        'lng' => 36.8146,
+        'triggered_at' => Carbon::parse('2026-08-09 08:10:00'),
+        'payload' => [
+            'stop_name' => 'Main Stop',
+            'stop_type' => 'Pickup',
+        ],
+    ]);
 
     $response = $this->actingAs($context['user'])
         ->getJson('/api/v1/transport/geofence-events/my');
@@ -782,7 +781,6 @@ test('active trip receives a TripLocation when telemetry is submitted', function
     ]);
 });
 
-
 test('trip location contains lat lng speed heading and accuracy', function () {
     $context = createLiveTrackingDriverContext();
 
@@ -819,7 +817,6 @@ test('trip location contains lat lng speed heading and accuracy', function () {
         ->and($location->recorded_at)->not->toBeNull();
 });
 
-
 test('scheduled trip does not receive locations', function () {
     $context = createLiveTrackingDriverContext();
 
@@ -850,7 +847,6 @@ test('scheduled trip does not receive locations', function () {
         'transport_trip_id' => $trip->id,
     ]);
 });
-
 
 test('completed trip does not receive locations', function () {
     $context = createLiveTrackingDriverContext();
@@ -887,7 +883,6 @@ test('completed trip does not receive locations', function () {
     ]);
 });
 
-
 test('telemetry still updates vehicle state regardless of trip status', function () {
     $context = createLiveTrackingDriverContext();
 
@@ -920,7 +915,6 @@ test('telemetry still updates vehicle state regardless of trip status', function
         ->and((int) $context['vehicle']->last_speed)->toBe(30)
         ->and($context['vehicle']->location_updated_at)->not->toBeNull();
 });
-
 
 test('driver cannot write to another drivers active trip', function () {
     $context = createLiveTrackingDriverContext();
@@ -992,7 +986,6 @@ test('driver cannot write to another drivers active trip', function () {
         'transport_trip_id' => $otherTrip->id,
     ]);
 });
-
 
 test('trip location remains school scoped', function () {
     $context = createLiveTrackingDriverContext();
@@ -1106,7 +1099,6 @@ test('driver can retrieve locations for their trip', function () {
         ->assertJsonPath('data.0.accuracy', 8.5);
 });
 
-
 test('trip locations are returned in chronological order', function () {
     $context = createLiveTrackingDriverContext();
 
@@ -1155,7 +1147,6 @@ test('trip locations are returned in chronological order', function () {
     expect($response->json('data.1.recorded_at'))
         ->toBe('2026-08-10T08:01:00.000000Z');
 });
-
 
 test('trip location retrieval is school scoped', function () {
     $context = createLiveTrackingDriverContext();
@@ -1220,7 +1211,6 @@ test('trip location retrieval is school scoped', function () {
         ->assertStatus(404);
 });
 
-
 test('trip location retrieval returns an empty list when trip has no locations', function () {
     $context = createLiveTrackingDriverContext();
 
@@ -1240,4 +1230,286 @@ test('trip location retrieval returns an empty list when trip has no locations',
     $response->assertStatus(200)
         ->assertJsonPath('success', true)
         ->assertJsonCount(0, 'data');
+});
+
+test('Traccar receiver requires the configured bearer token and POST method', function () {
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+    $payload = [
+        'id' => '13953732',
+        'lat' => '-1.2825',
+        'lon' => '36.8146',
+    ];
+
+    $this->postJson('/api/v1/transport/traccar', $payload)->assertUnauthorized();
+    $this->withHeader('Authorization', 'Bearer '.str_repeat('b', 64))
+        ->postJson('/api/v1/transport/traccar', $payload)
+        ->assertUnauthorized();
+    $this->get('/api/v1/transport/traccar?'.http_build_query($payload))->assertNotFound();
+
+    $this->assertDatabaseCount('vehicle_telemetry', 0);
+});
+
+test('Traccar receiver is unavailable when no bearer token is configured', function () {
+    config(['transport.traccar_webhook_token' => null]);
+
+    $this->withHeader('Authorization', 'Bearer '.str_repeat('a', 64))
+        ->postJson('/api/v1/transport/traccar', [
+            'id' => '13953732',
+            'lat' => '-1.2825',
+            'lon' => '36.8146',
+        ])
+        ->assertStatus(503);
+
+    $this->assertDatabaseCount('vehicle_telemetry', 0);
+});
+
+test('Traccar receiver is unavailable when its configured bearer token is too short', function () {
+    config(['transport.traccar_webhook_token' => str_repeat('a', 31)]);
+
+    $this->withHeader('Authorization', 'Bearer '.str_repeat('a', 31))
+        ->postJson('/api/v1/transport/traccar', [
+            'id' => '13953732',
+            'lat' => '-1.2825',
+            'lon' => '36.8146',
+            'timestamp' => now()->subMinute()->toIso8601String(),
+        ])
+        ->assertStatus(503);
+
+    $this->assertDatabaseCount('vehicle_telemetry', 0);
+});
+
+test('Traccar receiver rejects invalid location reports', function () {
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+    $context = createLiveTrackingDriverContext();
+    $context['vehicle']->update(['imei' => '13953732']);
+
+    $response = $this->withHeader('Authorization', 'Bearer '.$token)->postJson('/api/v1/transport/traccar', [
+        'id' => '13953732',
+        'lat' => '91',
+        'lon' => '36.8146',
+        'timestamp' => now()->subMinute()->toIso8601String(),
+    ]);
+
+    $response->assertStatus(422);
+    $this->assertDatabaseCount('vehicle_telemetry', 0);
+});
+
+test('Traccar receiver rejects unknown device identifiers', function () {
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+
+    $response = $this->withHeader('Authorization', 'Bearer '.$token)->post('/api/v1/transport/traccar', [
+        'id' => 'unknown-device',
+        'lat' => '-1.2825',
+        'lon' => '36.8146',
+        'timestamp' => now()->subMinute()->toIso8601String(),
+    ]);
+
+    $response->assertStatus(404);
+    $this->assertDatabaseCount('vehicle_telemetry', 0);
+});
+
+test('Traccar POST reports authenticate by bearer token and persist telemetry for the configured device id', function () {
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+    $context = createLiveTrackingDriverContext();
+    $context['vehicle']->update(['imei' => '13953732']);
+
+    $response = $this->withHeader('Authorization', 'Bearer '.$token)->post('/api/v1/transport/traccar', [
+        'id' => '13953732',
+        'lat' => '-1.2825',
+        'lon' => '36.8146',
+        'timestamp' => now()->subMinute()->toIso8601String(),
+        'speed' => '10',
+    ]);
+
+    $response->assertOk()->assertSeeText('OK');
+
+    $this->assertDatabaseHas('vehicle_telemetry', [
+        'vehicle_id' => $context['vehicle']->id,
+        'lat' => -1.2825,
+        'lng' => 36.8146,
+    ]);
+
+    $context['vehicle']->refresh();
+    expect((float) $context['vehicle']->last_lat)->toBe(-1.2825)
+        ->and((float) $context['vehicle']->last_lng)->toBe(36.8146);
+});
+
+test('Traccar geofence events use the assigned route school', function () {
+    School::factory()->create();
+
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+    $context = createLiveTrackingDriverContext();
+    $context['vehicle']->update(['imei' => '13953732']);
+
+    TransportGeofence::create([
+        'school_id' => $context['school']->id,
+        'transport_route_id' => $context['route']->id,
+        'stop_name' => 'Main Stop',
+        'stop_type' => 'pickup',
+        'lat' => -1.2825,
+        'lng' => 36.8146,
+        'radius_meters' => 100,
+        'active' => true,
+    ]);
+
+    $response = $this->withHeader('Authorization', 'Bearer '.$token)->post('/api/v1/transport/traccar', [
+        'id' => '13953732',
+        'lat' => '-1.2825',
+        'lon' => '36.8146',
+        'timestamp' => now()->subMinute()->toIso8601String(),
+    ]);
+
+    $response->assertOk();
+    $this->assertDatabaseHas('geofence_events', [
+        'school_id' => $context['school']->id,
+        'transport_route_id' => $context['route']->id,
+        'vehicle_id' => $context['vehicle']->id,
+        'event_type' => 'enter',
+    ]);
+});
+
+test('Traccar future timestamps are not written to history or operational records', function () {
+    Event::fake([
+        VehicleLocationUpdated::class,
+    ]);
+
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+    $context = createLiveTrackingDriverContext();
+    $context['vehicle']->update(['imei' => '13953732']);
+
+    TransportGeofence::create([
+        'school_id' => $context['school']->id,
+        'transport_route_id' => $context['route']->id,
+        'stop_name' => 'Future Position Stop',
+        'stop_type' => 'pickup',
+        'lat' => -1.2825,
+        'lng' => 36.8146,
+        'radius_meters' => 100,
+        'active' => true,
+    ]);
+
+    $futureTimestamp = now()->addDay();
+    $this->withHeader('Authorization', 'Bearer '.$token)->post('/api/v1/transport/traccar', [
+        'id' => '13953732',
+        'lat' => '-1.2825',
+        'lon' => '36.8146',
+        'timestamp' => $futureTimestamp->toIso8601String(),
+    ])->assertOk();
+
+    $this->assertDatabaseCount('vehicle_telemetry', 0);
+    $this->assertDatabaseCount('geofence_events', 0);
+    Event::assertNotDispatched(VehicleLocationUpdated::class);
+
+    $validTimestamp = now()->subMinutes(2);
+    $this->withHeader('Authorization', 'Bearer '.$token)->post('/api/v1/transport/traccar', [
+        'id' => '13953732',
+        'lat' => '-1.2801',
+        'lon' => '36.8172',
+        'timestamp' => $validTimestamp->toIso8601String(),
+    ])->assertOk();
+
+    $context['vehicle']->refresh();
+    expect((float) $context['vehicle']->last_lat)->toBe(-1.2801)
+        ->and((float) $context['vehicle']->last_lng)->toBe(36.8172);
+    Event::assertDispatchedTimes(VehicleLocationUpdated::class, 1);
+
+    $outOfOrderTimestamp = $validTimestamp->copy()->subMinute()->toIso8601String();
+    $this->withHeader('Authorization', 'Bearer '.$token)->post('/api/v1/transport/traccar', [
+        'id' => '13953732',
+        'lat' => '-1.2790',
+        'lon' => '36.8180',
+        'timestamp' => $outOfOrderTimestamp,
+    ])->assertOk();
+
+    $this->assertDatabaseCount('vehicle_telemetry', 1);
+    $context['vehicle']->refresh();
+    expect((float) $context['vehicle']->last_lat)->toBe(-1.2801)
+        ->and((float) $context['vehicle']->last_lng)->toBe(36.8172);
+    Event::assertDispatchedTimes(VehicleLocationUpdated::class, 1);
+});
+
+test('Traccar duplicate timestamps do not create duplicate telemetry or trip history', function () {
+    Event::fake([GeofenceTriggered::class, VehicleLocationUpdated::class]);
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+    $context = createLiveTrackingDriverContext();
+    $context['vehicle']->update(['imei' => '13953732']);
+    TransportTrip::create([
+        'school_id' => $context['school']->id,
+        'transport_route_id' => $context['route']->id,
+        'vehicle_id' => $context['vehicle']->id,
+        'driver_id' => $context['driver']->id,
+        'direction' => 'morning',
+        'status' => TransportTrip::STATUS_IN_PROGRESS,
+        'start_time' => now()->subMinutes(10),
+    ]);
+    TransportGeofence::create([
+        'school_id' => $context['school']->id,
+        'transport_route_id' => $context['route']->id,
+        'stop_name' => 'Duplicate Report Stop',
+        'stop_type' => 'pickup',
+        'lat' => -1.2825,
+        'lng' => 36.8146,
+        'radius_meters' => 100,
+        'active' => true,
+    ]);
+    $recordedAt = now()->subMinute()->setMicrosecond(123456);
+    $timestamp = $recordedAt->format('Y-m-d\TH:i:s.u\Z');
+    $payload = [
+        'id' => '13953732',
+        'lat' => '-1.2825',
+        'lon' => '36.8146',
+        'timestamp' => $timestamp,
+    ];
+
+    $this->withHeader('Authorization', 'Bearer '.$token)
+        ->post('/api/v1/transport/traccar', $payload)
+        ->assertOk();
+    $this->withHeader('Authorization', 'Bearer '.$token)
+        ->post('/api/v1/transport/traccar', $payload)
+        ->assertOk();
+
+    $this->assertDatabaseCount('vehicle_telemetry', 1);
+    $this->assertDatabaseCount('trip_locations', 1);
+    $this->assertDatabaseCount('geofence_events', 1);
+    expect($context['vehicle']->fresh()->location_updated_at->format('u'))->toBe('123456');
+    expect(VehicleTelemetry::query()->firstOrFail()->recorded_at->format('u'))->toBe('123456');
+    expect(TripLocation::query()->firstOrFail()->recorded_at->format('u'))->toBe('123456');
+    Event::assertDispatchedTimes(GeofenceTriggered::class, 1);
+});
+
+test('geofence broadcasts use a school-private channel', function () {
+    $context = createLiveTrackingDriverContext();
+    $event = new GeofenceTriggered([], $context['school']->id);
+    $channel = $event->broadcastOn();
+
+    expect($channel)->toBeInstanceOf(PrivateChannel::class)
+        ->and($channel->name)->toBe("private-fleet-geofences.{$context['school']->id}");
+});
+
+test('Traccar stale reports do not enter history or update live state', function () {
+    $token = str_repeat('a', 64);
+    config(['transport.traccar_webhook_token' => $token]);
+    $context = createLiveTrackingDriverContext();
+    $context['vehicle']->update(['imei' => '13953732']);
+
+    $this->withHeader('Authorization', 'Bearer '.$token)
+        ->post('/api/v1/transport/traccar', [
+            'id' => '13953732',
+            'lat' => '-1.2825',
+            'lon' => '36.8146',
+            'timestamp' => now()->subMinutes(11)->toIso8601String(),
+        ])
+        ->assertOk();
+
+    $context['vehicle']->refresh();
+    $this->assertDatabaseCount('vehicle_telemetry', 0);
+    expect($context['vehicle']->last_lat)->toBeNull()
+        ->and($context['vehicle']->location_updated_at)->toBeNull();
 });

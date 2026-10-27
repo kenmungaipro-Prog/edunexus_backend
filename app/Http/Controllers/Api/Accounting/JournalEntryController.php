@@ -353,7 +353,6 @@ class JournalEntryController extends Controller
         $toDate = $request->get('to_date', now()->toDateString());
 
         $accounts = ChartOfAccount::where('school_id', $request->user()->school_id)
-            ->where('is_active', true)
             ->whereIn('account_type', ['asset', 'liability', 'equity'])
             ->with(['journalEntryLines' => function ($q) use ($fromDate, $toDate) {
                 $q->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
@@ -361,35 +360,73 @@ class JournalEntryController extends Controller
                         ->whereBetween('entry_date', [$fromDate, $toDate]);
                 });
             }])
-            ->get()
-            ->map(function ($account) {
+            ->get();
+
+        $calculateRolledBalances = function ($accountRecords) {
+            $directBalances = $accountRecords->mapWithKeys(function ($account) {
                 $totalDebit = $account->journalEntryLines->sum('debit');
                 $totalCredit = $account->journalEntryLines->sum('credit');
 
-                $balance = $account->normal_balance === 'debit'
+                return [$account->id => $account->normal_balance === 'debit'
                     ? $totalDebit - $totalCredit
-                    : $totalCredit - $totalDebit;
+                    : $totalCredit - $totalDebit];
+            });
+            $balances = $directBalances->all();
+            $recordsById = $accountRecords->keyBy('id');
 
+            foreach ($accountRecords as $account) {
+                $amount = $directBalances[$account->id];
+                $parentId = $account->parent_account_id;
+                $visited = [$account->id => true];
+
+                while ($parentId !== null && $recordsById->has($parentId) && !isset($visited[$parentId])) {
+                    $balances[$parentId] += $amount;
+                    $visited[$parentId] = true;
+                    $parentId = $recordsById->get($parentId)->parent_account_id;
+                }
+            }
+            return $balances;
+        };
+
+        $accountBalances = $calculateRolledBalances($accounts);
+
+        $accounts = $accounts
+            ->filter(fn ($account) => $account->is_active || abs($accountBalances[$account->id]) > 0.00001)
+            ->map(function ($account) use ($accountBalances) {
                 return [
                     'id' => $account->id,
+                    'parent_account_id' => $account->parent_account_id,
                     'account_code' => $account->account_code,
                     'account_name' => $account->account_name,
                     'account_type' => $account->account_type,
                     'normal_balance' => $account->normal_balance,
-                    'amount' => $balance,
+                    'amount' => $accountBalances[$account->id],
                 ];
-            });
+            })
+            ->values();
 
         $assets = $accounts->where('account_type', 'asset')->values();
         $liabilities = $accounts->where('account_type', 'liability')->values();
         $equity = $accounts->where('account_type', 'equity')->values();
 
-        $totalAssets = $assets->sum('amount');
-        $totalLiabilities = $liabilities->sum('amount');
-        $totalEquity = $equity->sum('amount');
+        $topLevelTotal = function ($section) use ($accounts) {
+            $accountById = $accounts->keyBy('id');
+
+            return $section->filter(function ($account) use ($accountById) {
+                $parent = $account['parent_account_id'] === null
+                    ? null
+                    : $accountById->get($account['parent_account_id']);
+
+                return !$parent || $parent['account_type'] !== $account['account_type'];
+            })->sum('amount');
+        };
+
+        $totalAssets = $topLevelTotal($assets);
+        $totalLiabilities = $topLevelTotal($liabilities);
+        $totalEquity = $topLevelTotal($equity);
 
         // Compute net income for the period and include in equity as retained earnings
-        $incomeAccounts = ChartOfAccount::where('school_id', $request->user()->school_id)
+        $incomeAccountRecords = ChartOfAccount::where('school_id', $request->user()->school_id)
             ->whereIn('account_type', ['revenue', 'expense'])
             ->with(['journalEntryLines' => function ($q) use ($fromDate, $toDate) {
                 $q->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
@@ -397,18 +434,31 @@ class JournalEntryController extends Controller
                         ->whereBetween('entry_date', [$fromDate, $toDate]);
                 });
             }])
-            ->get()
-            ->map(function ($account) {
-                $totalDebit = $account->journalEntryLines->sum('debit');
-                $totalCredit = $account->journalEntryLines->sum('credit');
-                $balance = $account->normal_balance === 'debit'
-                    ? $totalDebit - $totalCredit
-                    : $totalCredit - $totalDebit;
-                return [ 'account_type' => $account->account_type, 'amount' => $balance ];
-            });
+            ->get();
+        $incomeAccountBalances = $calculateRolledBalances($incomeAccountRecords);
+        $incomeAccounts = $incomeAccountRecords->map(function ($account) use ($incomeAccountBalances) {
+            return [
+                'id' => $account->id,
+                'parent_account_id' => $account->parent_account_id,
+                'account_type' => $account->account_type,
+                'amount' => $incomeAccountBalances[$account->id],
+            ];
+        });
 
-        $totalRevenue = $incomeAccounts->where('account_type', 'revenue')->sum('amount');
-        $totalExpense = $incomeAccounts->where('account_type', 'expense')->sum('amount');
+        $incomeTopLevelTotal = function ($type) use ($incomeAccounts) {
+            $accountsById = $incomeAccounts->keyBy('id');
+
+            return $incomeAccounts->where('account_type', $type)->filter(function ($account) use ($accountsById) {
+                $parent = $account['parent_account_id'] === null
+                    ? null
+                    : $accountsById->get($account['parent_account_id']);
+
+                return !$parent || $parent['account_type'] !== $account['account_type'];
+            })->sum('amount');
+        };
+
+        $totalRevenue = $incomeTopLevelTotal('revenue');
+        $totalExpense = $incomeTopLevelTotal('expense');
         $netIncome = $totalRevenue - $totalExpense;
 
         $equityWithIncome = $totalEquity + $netIncome;

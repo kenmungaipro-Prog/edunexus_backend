@@ -2,27 +2,38 @@
 
 namespace App\Http\Controllers\Api\Transport;
 
+use App\Events\GeofenceTriggered;
+use App\Events\VehicleLocationUpdated;
 use App\Http\Controllers\Controller;
-use App\Models\{Vehicle, Driver, Student, TimetableSlot, ClassRoom, VehicleTelemetry, GeofenceEvent};
-use App\Models\Transport\{TransportRoute, TransportGeofence, TransportStop};
 use App\Jobs\SendSmsJob;
+use App\Models\GeofenceEvent;
+use App\Models\Student;
+use App\Models\Transport\TransportDemoSession;
+use App\Models\Transport\TransportGeofence;
+use App\Models\Transport\TransportRoute;
+use App\Models\Transport\TransportStop;
+use App\Models\Transport\TransportTrip;
+use App\Models\Transport\TripLocation;
+use App\Models\Vehicle;
+use App\Models\VehicleTelemetry;
 use App\Services\SmsService;
+use App\Services\Transport\StopService;
+use Carbon\Carbon;
+use Illuminate\Broadcasting\BroadcastException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Validator;
-use App\Events\VehicleLocationUpdated;
-use App\Events\GeofenceTriggered;
-use App\Services\Transport\StopService;
-use App\Models\Transport\TransportTrip;
-use App\Models\Transport\TripLocation;
-use Carbon\Carbon;
+use Illuminate\Validation\Rule;
 
 class TransportController extends Controller
 {
+    private const MAX_POSITION_AGE_MINUTES = 10;
+
     protected SmsService $sms;
+
     protected StopService $stopService;
 
     public function __construct(SmsService $sms, StopService $stopService)
@@ -46,30 +57,54 @@ class TransportController extends Controller
         return response()->json(['success' => true, 'data' => $routes]);
     }
 
-
     // Restored to live() to match your API routes and fixed the array/closure syntax
     public function live(): JsonResponse
     {
         // Gather all vehicles to show complete real-time fleet overview
+        TransportDemoSession::query()
+            ->where('school_id', currentSchoolId())
+            ->where(function ($query) {
+                $query->where('expires_at', '<=', now())
+                    ->orWhere('hard_expires_at', '<=', now());
+            })
+            ->delete();
+
+        $demoPositions = TransportDemoSession::query()
+            ->where('school_id', currentSchoolId())
+            ->where('expires_at', '>', now())
+            ->where('hard_expires_at', '>', now())
+            ->get()
+            ->keyBy('vehicle_id');
+
         $vehicles = Vehicle::where('status', 'active')
-            ->whereHas('currentRoute', fn($query) => $query->where('school_id', currentSchoolId()))
+            ->whereHas('currentRoute', fn ($query) => $query->where('school_id', currentSchoolId()))
             ->with('currentRoute.driver')
             ->get();
 
-        $formatted = $vehicles->map(function ($vehicle) {
+        $formatted = $vehicles->map(function ($vehicle) use ($demoPositions) {
             $assignedRoute = $vehicle->currentRoute;
-            
+            $demo = $demoPositions->get($vehicle->id);
+
             return [
                 'vehicle_id' => $vehicle->id,
-                'number'     => $vehicle->registration_number,
-                'route'      => $assignedRoute ? $assignedRoute->name : null,
-                'driver'     => ($assignedRoute && $assignedRoute->driver) ? $assignedRoute->driver->name : null,
-                'lat'        => $vehicle->last_lat,
-                'lng'        => $vehicle->last_lng,
-                'speed'      => $vehicle->last_speed,
-                'updated_at' => $vehicle->location_updated_at 
-                                    ? Carbon::parse($vehicle->location_updated_at)->toIso8601String() 
+                'number' => $vehicle->registration_number,
+                'route' => $assignedRoute ? $assignedRoute->name : null,
+                'driver' => ($assignedRoute && $assignedRoute->driver) ? $assignedRoute->driver->name : null,
+                'lat' => $vehicle->last_lat,
+                'lng' => $vehicle->last_lng,
+                'speed' => $vehicle->last_speed,
+                'updated_at' => $vehicle->location_updated_at
+                                    ? Carbon::parse($vehicle->location_updated_at)->toIso8601String()
                                     : null,
+                'demo' => $demo && $demo->lat !== null && $demo->lng !== null
+                    ? [
+                        'lat' => $demo->lat,
+                        'lng' => $demo->lng,
+                        'speed' => $demo->speed,
+                        'updated_at' => $demo->position_at?->toIso8601String(),
+                        'expires_at' => $demo->expires_at->toIso8601String(),
+                    ]
+                    : null,
             ];
         });
 
@@ -78,6 +113,17 @@ class TransportController extends Controller
 
     public function receiveTraccar(Request $request)
     {
+        $configuredToken = config('transport.traccar_webhook_token');
+
+        if (! is_string($configuredToken) || strlen($configuredToken) < 32) {
+            return response('GPS receiver is unavailable', 503)->header('Content-Type', 'text/plain');
+        }
+
+        $providedToken = $request->bearerToken();
+        if (! is_string($providedToken) || ! hash_equals($configuredToken, $providedToken)) {
+            return response('Unauthorized', 401)->header('Content-Type', 'text/plain');
+        }
+
         $location = $request->input('location');
         [$locationLat, $locationLng] = is_string($location)
             ? array_pad(explode(',', $location, 2), 2, null)
@@ -96,7 +142,7 @@ class TransportController extends Controller
             'id' => 'required|string|max:32',
             'lat' => 'required|numeric|between:-90,90',
             'lon' => 'required|numeric|between:-180,180',
-            'timestamp' => 'nullable|string|max:40',
+            'timestamp' => 'required|string|max:40',
             'speed' => 'nullable|numeric|min:0|max:400',
             'bearing' => 'nullable|numeric|between:0,360',
             'accuracy' => 'nullable|numeric|min:0|max:10000',
@@ -122,7 +168,7 @@ class TransportController extends Controller
         }
 
         try {
-            $recordedAt = $this->parseTraccarTimestamp($validated['timestamp'] ?? null);
+            $recordedAt = $this->parseTraccarTimestamp($validated['timestamp']);
         } catch (\Throwable $exception) {
             return response('Invalid timestamp', 422)->header('Content-Type', 'text/plain');
         }
@@ -133,59 +179,68 @@ class TransportController extends Controller
         $heading = isset($validated['bearing']) ? (float) $validated['bearing'] : null;
         $accuracy = isset($validated['accuracy']) ? (float) $validated['accuracy'] : null;
 
-        VehicleTelemetry::create([
-            'vehicle_id' => $vehicle->id,
-            'lat' => $lat,
-            'lng' => $lng,
-            'speed' => $speed,
-            'recorded_at' => $recordedAt,
-        ]);
+        $accepted = DB::transaction(function () use ($vehicle, $route, $recordedAt, $lat, $lng, $speed, $heading, $accuracy) {
+            $lockedVehicle = Vehicle::query()->lockForUpdate()->findOrFail($vehicle->id);
+            $now = now();
 
-        $isLatestLocation = ! $vehicle->location_updated_at
-            || $recordedAt->greaterThanOrEqualTo($vehicle->location_updated_at);
+            if (
+                $recordedAt->greaterThan($now)
+                || $recordedAt->lessThan($now->copy()->subMinutes(self::MAX_POSITION_AGE_MINUTES))
+                || ($lockedVehicle->location_updated_at && $recordedAt->lessThanOrEqualTo($lockedVehicle->location_updated_at))
+            ) {
+                return false;
+            }
 
-        $activeTrip = TransportTrip::where('school_id', $route->school_id)
-            ->where('transport_route_id', $route->id)
-            ->where('vehicle_id', $vehicle->id)
-            ->where('status', TransportTrip::STATUS_IN_PROGRESS)
-            ->first();
-
-        if ($activeTrip) {
-            TripLocation::create([
-                'transport_trip_id' => $activeTrip->id,
+            VehicleTelemetry::create([
+                'vehicle_id' => $lockedVehicle->id,
                 'lat' => $lat,
                 'lng' => $lng,
                 'speed' => $speed,
-                'heading' => $heading,
-                'accuracy' => $accuracy,
                 'recorded_at' => $recordedAt,
             ]);
-        }
 
-        if ($isLatestLocation) {
-            $vehicle->update([
+            $activeTrip = TransportTrip::where('school_id', $route->school_id)
+                ->where('transport_route_id', $route->id)
+                ->where('vehicle_id', $lockedVehicle->id)
+                ->where('status', TransportTrip::STATUS_IN_PROGRESS)
+                ->first();
+
+            if ($activeTrip) {
+                TripLocation::create([
+                    'transport_trip_id' => $activeTrip->id,
+                    'lat' => $lat,
+                    'lng' => $lng,
+                    'speed' => $speed,
+                    'heading' => $heading,
+                    'accuracy' => $accuracy,
+                    'recorded_at' => $recordedAt,
+                ]);
+            }
+
+            $lockedVehicle->update([
                 'last_lat' => $lat,
                 'last_lng' => $lng,
                 'last_speed' => $speed,
                 'location_updated_at' => $recordedAt,
             ]);
 
-            $this->checkGeofenceTriggers($route, $vehicle, $lat, $lng);
-            $this->checkOffRoute($route, $vehicle, $lat, $lng);
+            $this->checkGeofenceTriggers($route, $lockedVehicle, $lat, $lng);
+            DB::afterCommit(fn () => $this->checkOffRoute($route, $lockedVehicle, $lat, $lng));
+            $lockedVehicle->load(['currentRoute.driver']);
+            DB::afterCommit(fn () => $this->broadcastTransportEvent(new VehicleLocationUpdated($lockedVehicle)));
 
-            $vehicle->load(['currentRoute.driver']);
-            broadcast(new VehicleLocationUpdated($vehicle));
+            return true;
+        });
+
+        if (! $accepted) {
+            return response('OK', 200)->header('Content-Type', 'text/plain');
         }
 
         return response('OK', 200)->header('Content-Type', 'text/plain');
     }
 
-    private function parseTraccarTimestamp(?string $timestamp): Carbon
+    private function parseTraccarTimestamp(string $timestamp): Carbon
     {
-        if ($timestamp === null || trim($timestamp) === '') {
-            return now();
-        }
-
         if (is_numeric($timestamp)) {
             $value = (float) $timestamp;
 
@@ -200,14 +255,14 @@ class TransportController extends Controller
     public function telemetryHistory(Request $request, $id): JsonResponse
     {
         $vehicle = Vehicle::where('id', $id)
-            ->whereHas('currentRoute', fn($query) => $query->where('school_id', currentSchoolId()))
+            ->whereHas('currentRoute', fn ($query) => $query->where('school_id', currentSchoolId()))
             ->firstOrFail();
 
         $query = VehicleTelemetry::where('vehicle_id', $vehicle->id);
 
         if ($request->filled('date')) {
             try {
-                $date = Carbon::parse($request->query('date')); 
+                $date = Carbon::parse($request->query('date'));
                 $query->whereDate('recorded_at', $date->toDateString());
             } catch (\Throwable $e) {
                 return response()->json(['success' => false, 'message' => 'Invalid date filter provided.'], 422);
@@ -219,17 +274,16 @@ class TransportController extends Controller
             ->get()
             ->map(function ($entry) {
                 return [
-                    'vehicle_id'  => $entry->vehicle_id,
-                    'lat'         => $entry->lat,
-                    'lng'         => $entry->lng,
-                    'speed'       => $entry->speed,
+                    'vehicle_id' => $entry->vehicle_id,
+                    'lat' => $entry->lat,
+                    'lng' => $entry->lng,
+                    'speed' => $entry->speed,
                     'recorded_at' => $entry->recorded_at ? $entry->recorded_at->toIso8601String() : null,
                 ];
             });
 
         return response()->json(['success' => true, 'data' => $history]);
     }
-
 
     public function stopsForRoute($routeId): JsonResponse
     {
@@ -292,19 +346,20 @@ class TransportController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'name'       => 'required|string|max:255',
+            'name' => 'required|string|max:255',
             'vehicle_id' => 'required|exists:vehicles,id',
-            'driver_id'  => 'required|exists:drivers,id',
-            'stops'      => 'required|array|min:1',
-            'stops.*.name'         => 'required|string',
-            'stops.*.pickup_time'  => 'required|date_format:H:i',
-            'stops.*.drop_time'    => 'required|date_format:H:i',
-            'monthly_fee'          => 'required|numeric|min:0',
+            'driver_id' => 'required|exists:drivers,id',
+            'stops' => 'required|array|min:1',
+            'stops.*.name' => 'required|string',
+            'stops.*.pickup_time' => 'required|date_format:H:i',
+            'stops.*.drop_time' => 'required|date_format:H:i',
+            'monthly_fee' => 'required|numeric|min:0',
         ]);
 
         $validated['school_id'] = currentSchoolId();
 
         $route = TransportRoute::create($validated);
+
         return response()->json(['success' => true, 'data' => $route], 201);
     }
 
@@ -336,25 +391,26 @@ class TransportController extends Controller
         $transportRoute = TransportRoute::where('school_id', currentSchoolId())->findOrFail($id);
 
         $validated = $request->validate([
-            'name'       => 'sometimes|required|string|max:255',
+            'name' => 'sometimes|required|string|max:255',
             'vehicle_id' => [
                 'sometimes',
                 'required',
                 Rule::exists('vehicles', 'id')->where(fn ($query) => $query->where('school_id', currentSchoolId())),
             ],
-            'driver_id'  => [
+            'driver_id' => [
                 'sometimes',
                 'required',
                 Rule::exists('drivers', 'id')->where(fn ($query) => $query->where('school_id', currentSchoolId())),
             ],
-            'stops'      => 'sometimes|required|array|min:1',
-            'stops.*.name'         => 'required|string',
-            'stops.*.pickup_time'  => 'required|date_format:H:i',
-            'stops.*.drop_time'    => 'required|date_format:H:i',
-            'monthly_fee'          => 'sometimes|required|numeric|min:0',
+            'stops' => 'sometimes|required|array|min:1',
+            'stops.*.name' => 'required|string',
+            'stops.*.pickup_time' => 'required|date_format:H:i',
+            'stops.*.drop_time' => 'required|date_format:H:i',
+            'monthly_fee' => 'sometimes|required|numeric|min:0',
         ]);
 
         $transportRoute->update($validated);
+
         return response()->json(['success' => true, 'data' => $transportRoute->fresh()]);
     }
 
@@ -362,7 +418,7 @@ class TransportController extends Controller
     {
         $transportRoute = TransportRoute::where('school_id', currentSchoolId())->findOrFail($id);
         $transportRoute->delete();
-        
+
         return response()->json(['success' => true, 'message' => 'Route deleted.']);
     }
 
@@ -585,7 +641,6 @@ class TransportController extends Controller
             'vehicle' => $route->vehicle?->registration_number,
             'driver_name' => $route->driver?->name,
             'students_count' => $route->students->count(),
-            'students_count' => $route->students->count(),
             'date' => $date,
             'metrics' => $metrics,
             'efficiency_score' => $efficiencyScore,
@@ -630,6 +685,7 @@ class TransportController extends Controller
                 $metrics = $this->buildRouteTelemetryMetrics(
                     $telemetryByVehicle->get($route->vehicle_id, collect())
                 );
+
                 return [
                     'route_name' => $route->name,
                     'vehicle' => $route->vehicle?->registration_number,
@@ -924,6 +980,7 @@ class TransportController extends Controller
         $score -= min(40, $metrics['idle_minutes'] * 1.2);
         $score -= $metrics['average_speed'] < 25 ? 15 : 0;
         $score -= $metrics['max_speed'] > 80 ? 10 : 0;
+
         return max(0, min(100, (int) round($score)));
     }
 
@@ -987,6 +1044,7 @@ class TransportController extends Controller
 
         if (! $nextEvent) {
             $lastEvent = end($events);
+
             return [
                 'next_stop' => $lastEvent['name'],
                 'next_type' => $lastEvent['type'],
@@ -999,7 +1057,7 @@ class TransportController extends Controller
         }
 
         $etaMinutes = max(0, $now->diffInMinutes($nextEvent['time']));
-        $remaining = array_filter($events, fn($event) => $event['time']->greaterThan($now));
+        $remaining = array_filter($events, fn ($event) => $event['time']->greaterThan($now));
 
         return [
             'next_stop' => $nextEvent['name'],
@@ -1014,7 +1072,7 @@ class TransportController extends Controller
 
     public function updateTelemetry(Request $request, $id): JsonResponse
     {
-        $vehicle = \App\Models\Vehicle::findOrFail($id);
+        $vehicle = Vehicle::findOrFail($id);
         $user = auth()->user();
 
         if (! $user || ! $user->isDriver() || ! $user->driver) {
@@ -1032,26 +1090,26 @@ class TransportController extends Controller
         }
 
         $request->validate([
-            'lat'      => 'required|numeric',
-            'lng'      => 'required|numeric',
-            'speed'    => 'required|integer|min:0',
-            'heading'  => 'nullable|numeric',
+            'lat' => 'required|numeric',
+            'lng' => 'required|numeric',
+            'speed' => 'required|integer|min:0',
+            'heading' => 'nullable|numeric',
             'accuracy' => 'nullable|numeric|min:0',
         ]);
 
         // Update the vehicle coordinates in the database
         $vehicle->update([
-            'last_lat'            => $request->lat,
-            'last_lng'            => $request->lng,
-            'last_speed'          => $request->speed,
+            'last_lat' => $request->lat,
+            'last_lng' => $request->lng,
+            'last_speed' => $request->speed,
             'location_updated_at' => now(),
         ]);
 
         VehicleTelemetry::create([
-            'vehicle_id'  => $vehicle->id,
-            'lat'         => $request->lat,
-            'lng'         => $request->lng,
-            'speed'       => $request->speed,
+            'vehicle_id' => $vehicle->id,
+            'lat' => $request->lat,
+            'lng' => $request->lng,
+            'speed' => $request->speed,
             'recorded_at' => now(),
         ]);
 
@@ -1080,17 +1138,19 @@ class TransportController extends Controller
         // Load relationships needed by your event payload formatting if necessary
         $vehicle->load(['currentRoute.driver']);
 
-        // Broadcast the real-time event via Reverb/Pusher immediately
-        broadcast(new VehicleLocationUpdated($vehicle));
+        // Realtime delivery is optional; the GPS update is already persisted.
+        $broadcasted = $this->broadcastTransportEvent(new VehicleLocationUpdated($vehicle));
 
         return response()->json([
             'success' => true,
-            'message' => 'Telemetry updated and broadcast successfully.',
-            'data'    => [
-                'lat'   => $vehicle->last_lat,
-                'lng'   => $vehicle->last_lng,
+            'message' => $broadcasted
+                ? 'Telemetry saved.'
+                : 'Telemetry updated, but realtime delivery is unavailable.',
+            'data' => [
+                'lat' => $vehicle->last_lat,
+                'lng' => $vehicle->last_lng,
                 'speed' => $vehicle->last_speed,
-            ]
+            ],
         ]);
     }
 
@@ -1164,7 +1224,7 @@ class TransportController extends Controller
             if (empty($phone)) {
                 continue;
             }
-            SendSmsJob::dispatch($schoolId, null, $phone, $message);
+            SendSmsJob::dispatch($schoolId, null, $phone, $message)->afterCommit();
         }
     }
 
@@ -1202,6 +1262,7 @@ class TransportController extends Controller
         $dLng = deg2rad($centerLng - $lng);
         $a = sin($dLat / 2) * sin($dLat / 2) + cos(deg2rad($lat)) * cos(deg2rad($centerLat)) * sin($dLng / 2) * sin($dLng / 2);
         $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+
         return $earthRadius * $c;
     }
 
@@ -1209,6 +1270,7 @@ class TransportController extends Controller
     {
         if (! $this->isOffRoute($route, $lat, $lng)) {
             Cache::forget("transport-offroute-{$vehicle->id}");
+
             return;
         }
 
@@ -1245,7 +1307,7 @@ class TransportController extends Controller
     private function recordGeofenceEvent(TransportRoute $route, Vehicle $vehicle, TransportGeofence $geofence, string $eventType, float $lat, float $lng): void
     {
         $event = GeofenceEvent::create([
-            'school_id' => currentSchoolId(),
+            'school_id' => $route->school_id,
             'transport_route_id' => $route->id,
             'transport_geofence_id' => $geofence->id,
             'vehicle_id' => $vehicle->id,
@@ -1260,7 +1322,7 @@ class TransportController extends Controller
             ],
         ]);
 
-        broadcast(new GeofenceTriggered([
+        $broadcast = new GeofenceTriggered([
             'route_id' => $route->id,
             'route_name' => $route->name,
             'vehicle_id' => $vehicle->id,
@@ -1272,6 +1334,24 @@ class TransportController extends Controller
             'lng' => $lng,
             'triggered_at' => $event->triggered_at->toIso8601String(),
             'payload' => $event->payload,
-        ], $route->school_id));
+        ], $route->school_id);
+
+        DB::afterCommit(fn () => $this->broadcastTransportEvent($broadcast));
+    }
+
+    private function broadcastTransportEvent(object $event): bool
+    {
+        try {
+            broadcast($event);
+
+            return true;
+        } catch (BroadcastException $exception) {
+            Log::warning('Transport realtime broadcast failed; telemetry processing continued.', [
+                'event' => class_basename($event),
+                'exception' => $exception::class,
+            ]);
+
+            return false;
+        }
     }
 }

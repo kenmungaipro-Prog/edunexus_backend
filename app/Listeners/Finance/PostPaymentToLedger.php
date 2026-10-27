@@ -32,10 +32,9 @@ class PostPaymentToLedger
                 ->where('is_bank_account', true)
                 ->first();
 
-            // 2. Resolve Asset Reduction (Accounts Receivable Control)
+            // 2. Resolve Asset Reduction (Student Fee Receivables)
             $arAccount = ChartOfAccount::where('school_id', $schoolId)
-                ->where('account_type', 'asset')
-                ->where('is_control_account', true)
+                ->where('account_code', '1200')
                 ->first();
 
             if (!$bankAccount || !$arAccount) {
@@ -47,13 +46,35 @@ class PostPaymentToLedger
                     ->first();
 
                 $arAccount = ChartOfAccount::where('school_id', $schoolId)
-                    ->where('account_type', 'asset')
-                    ->where('is_control_account', true)
+                    ->where('account_code', '1200')
                     ->first();
             }
 
-            if (!$bankAccount || !$arAccount) {
+            if (!$bankAccount || !$arAccount || $arAccount->account_type !== 'asset') {
                 throw new Exception("Critical accounts (Bank or A/R) are missing for ledger posting.");
+            }
+
+            $studentFeeReceivables = ChartOfAccount::firstOrCreate(
+                ['school_id' => $schoolId, 'account_code' => '1210'],
+                [
+                    'parent_account_id' => $arAccount->id,
+                    'account_name' => 'Student Fee Receivables',
+                    'account_type' => 'asset',
+                    'normal_balance' => 'debit',
+                    'currency' => 'KES',
+                    'is_control_account' => false,
+                    'is_bank_account' => false,
+                    'is_system' => true,
+                    'is_active' => true,
+                ]
+            );
+
+            if ($studentFeeReceivables->account_type !== 'asset' || !$studentFeeReceivables->is_active) {
+                throw new Exception("Student Fee Receivables account (1210) must be an active asset account.");
+            }
+
+            if ($studentFeeReceivables->parent_account_id !== $arAccount->id) {
+                $studentFeeReceivables->update(['parent_account_id' => $arAccount->id]);
             }
 
             // 3. Create Journal Entry
@@ -76,12 +97,12 @@ class PostPaymentToLedger
                 'memo'                => "Funds received via " . strtoupper($payment->payment_method),
             ]);
 
-            // 5. CREDIT: Accounts Receivable (Decreasing owed debt)
+            // 5. CREDIT: Student Fee Receivables (Decreasing owed student fees)
             $journalEntry->journalEntryLines()->create([
-                'chart_of_account_id' => $arAccount->id,
+                'chart_of_account_id' => $studentFeeReceivables->id,
                 'debit'               => '0.00',
                 'credit'              => $payment->amount,
-                'memo'                => "Liquidation of receivables",
+                'memo'                => "Liquidation of student fee receivables",
             ]);
 
             // 6. Assert strict double-entry balance

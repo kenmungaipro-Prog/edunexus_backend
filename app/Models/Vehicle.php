@@ -14,6 +14,8 @@ class Vehicle extends Model
 {
     protected $table = 'vehicles';
 
+    protected $dateFormat = 'Y-m-d H:i:s.u';
+
     protected $fillable = [
         'school_id',
         'registration_number',

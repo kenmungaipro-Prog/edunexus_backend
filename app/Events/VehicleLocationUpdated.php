@@ -31,6 +31,7 @@ class VehicleLocationUpdated implements ShouldBroadcastNow
             'lng'        => $vehicle->last_lng,
             'speed'      => $vehicle->last_speed,
             'updated_at' => $vehicle->location_updated_at ? $vehicle->location_updated_at->toIso8601String() : null,
+            'demo'       => null,
         ];
     }
 

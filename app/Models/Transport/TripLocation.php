@@ -9,6 +9,8 @@ class TripLocation extends Model
 {
     protected $table = 'trip_locations';
 
+    protected $dateFormat = 'Y-m-d H:i:s.u';
+
     protected $fillable = [
         'transport_trip_id',
         'lat',

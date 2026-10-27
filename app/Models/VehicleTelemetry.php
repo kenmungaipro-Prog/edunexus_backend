@@ -9,6 +9,8 @@ class VehicleTelemetry extends Model
 {
     protected $table = 'vehicle_telemetry';
 
+    protected $dateFormat = 'Y-m-d H:i:s.u';
+
     protected $fillable = [
         'vehicle_id',
         'lat',

@@ -2,7 +2,7 @@
 
 namespace App\Events;
 
-use Illuminate\Broadcasting\Channel;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
@@ -21,10 +21,11 @@ class GeofenceTriggered implements ShouldBroadcastNow
         $this->schoolId = $schoolId;
     }
 
-    public function broadcastOn(): Channel
+    public function broadcastOn(): array|PrivateChannel
     {
-        $channel = $this->schoolId ? "fleet-geofences.{$this->schoolId}" : 'fleet-geofences';
-        return new Channel($channel);
+        return $this->schoolId
+            ? new PrivateChannel("fleet-geofences.{$this->schoolId}")
+            : [];
     }
 
     public function broadcastAs(): string

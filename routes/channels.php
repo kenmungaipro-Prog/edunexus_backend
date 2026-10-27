@@ -12,3 +12,9 @@ Broadcast::channel('fleet-delivery.{schoolId}', function ($user, $schoolId) {
     // allow drivers and admins from the same school to listen
     return isset($user->school_id) && (int)$user->school_id === (int)$schoolId;
 });
+
+Broadcast::channel('fleet-geofences.{schoolId}', function ($user, $schoolId) {
+    return $user
+        && isset($user->school_id)
+        && (int) $user->school_id === (int) $schoolId;
+});
