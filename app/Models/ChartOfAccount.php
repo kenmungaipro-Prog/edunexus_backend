@@ -13,6 +13,7 @@ class ChartOfAccount extends Model
     protected $fillable = [
         'school_id',
         'parent_account_id',
+        'sort_order',
         'account_code',
         'account_name',
         'account_type',
@@ -25,6 +26,7 @@ class ChartOfAccount extends Model
     ];
 
     protected $casts = [
+        'sort_order' => 'integer',
         'is_control_account' => 'boolean',
         'is_bank_account' => 'boolean',
         'is_system' => 'boolean',
@@ -44,7 +46,9 @@ class ChartOfAccount extends Model
 
     public function children(): HasMany
     {
-        return $this->hasMany(ChartOfAccount::class, 'parent_account_id');
+        return $this->hasMany(ChartOfAccount::class, 'parent_account_id')
+            ->orderBy('sort_order')
+            ->orderBy('account_code');
     }
 
     public function journalEntryLines(): HasMany

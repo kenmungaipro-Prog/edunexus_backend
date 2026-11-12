@@ -78,6 +78,7 @@ Route::prefix('v1')->group(function () {
 
         // Auth
         Route::post('/auth/logout',          [AuthController::class, 'logout']);
+        Route::post('/auth/logout-all-devices', [AuthController::class, 'logoutAllDevices']);
         Route::get('/auth/me',               [AuthController::class, 'me']);
         Route::post('/auth/refresh',         [AuthController::class, 'refresh']);
         Route::post('/auth/change-password', [AuthController::class, 'changePassword']);
@@ -93,6 +94,7 @@ Route::prefix('v1')->group(function () {
         Route::middleware('role:admin,teacher,receptionist')->group(function () {
             // Static routes MUST come before apiResource to avoid {student} wildcard matching them.
             Route::get('students/stats',                  [StudentController::class, 'stats']);
+            Route::get('students/admission-number-check', [StudentController::class, 'checkAdmissionNumber']);
             Route::post('students/import',                [StudentController::class, 'import']);
             Route::apiResource('students', StudentController::class);
             Route::get('students/{student}/report-card',  [StudentController::class, 'reportCard']);
@@ -204,6 +206,7 @@ Route::prefix('v1')->group(function () {
             // Chart of Accounts
             Route::get('accounts/tree', [ChartOfAccountController::class, 'tree']);
             Route::get('accounts/by-type/{type}', [ChartOfAccountController::class, 'byType']);
+            Route::post('accounts/reorder', [ChartOfAccountController::class, 'reorder']);
             Route::apiResource('accounts', ChartOfAccountController::class);
 
             // Journal Entries
@@ -332,6 +335,8 @@ Route::prefix('v1')->group(function () {
             Route::get('/fees',       [AnalyticsController::class, 'feeAnalytics']);
             Route::get('/attendance', [AnalyticsController::class, 'attendanceTrend']);
         });
+
+        Route::get('/settings/school/branding', [\App\Http\Controllers\Api\SettingsController::class, 'branding']);
 
         // ── Settings ───────────────────────────────────────────
         Route::middleware('role:admin,superadmin')->prefix('settings')->group(function () {

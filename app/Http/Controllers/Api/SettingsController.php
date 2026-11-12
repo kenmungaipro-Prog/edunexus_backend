@@ -16,33 +16,12 @@ class SettingsController extends Controller
 {
     public function index(): JsonResponse
     {
+        $school = School::findOrFail(currentSchoolId());
+        $settings = $this->settingsWithDefaults($school);
+
         return response()->json([
             'success' => true,
-            'data'    => [
-                'notifications' => [
-                    'email_alerts'      => true,
-                    'sms_alerts'        => false,
-                    'fee_reminders'     => true,
-                    'attendance_alerts' => true,
-                    'exam_reminders'    => true,
-                ],
-                'preferences' => [
-                    'theme'           => 'dark',
-                    'language'        => 'en',
-                    'date_format'     => 'd M Y',
-                    'currency'        => 'INR',
-                    'timezone'        => 'Asia/Kolkata',
-                    'items_per_page'  => 20,
-                ],
-                'academic' => [
-                    'current_session'   => currentSession(),
-                    'working_days'      => ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
-                    'periods_per_day'   => 8,
-                    'period_duration'   => 45,
-                    'attendance_threshold' => 75,
-                    'passing_percentage'   => 35,
-                ],
-            ],
+            'data' => $settings,
         ]);
     }
 
@@ -56,19 +35,54 @@ class SettingsController extends Controller
             'preferences.language'     => 'sometimes|string|max:5',
             'preferences.date_format'  => 'sometimes|string|max:20',
             'preferences.timezone'     => 'sometimes|string|max:50',
+            'preferences.currency'     => 'sometimes|string|size:3',
             'preferences.items_per_page' => 'sometimes|integer|in:10,20,50,100',
             'academic'                 => 'sometimes|array',
             'academic.attendance_threshold' => 'sometimes|integer|between:50,90',
             'academic.passing_percentage'   => 'sometimes|integer|between:20,60',
         ]);
 
-        // In production, store in a school_settings table or JSON column
-        // Here we return the merged result
+        $school = School::findOrFail(currentSchoolId());
+        $settings = array_replace_recursive(
+            $this->settingsWithDefaults($school),
+            $request->only(['notifications', 'preferences', 'academic']),
+        );
+        $school->update(['settings' => $settings]);
+
         return response()->json([
             'success' => true,
             'message' => 'Settings saved.',
-            'data'    => $request->all(),
+            'data' => $settings,
         ]);
+    }
+
+    private function settingsWithDefaults(School $school): array
+    {
+        return array_replace_recursive([
+            'notifications' => [
+                'email_alerts' => true,
+                'sms_alerts' => false,
+                'fee_reminders' => true,
+                'attendance_alerts' => true,
+                'exam_reminders' => true,
+            ],
+            'preferences' => [
+                'theme' => 'dark',
+                'language' => 'en',
+                'date_format' => 'd M Y',
+                'currency' => 'KES',
+                'timezone' => 'Africa/Nairobi',
+                'items_per_page' => 20,
+            ],
+            'academic' => [
+                'current_session' => currentSession(),
+                'working_days' => ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+                'periods_per_day' => 8,
+                'period_duration' => 45,
+                'attendance_threshold' => 75,
+                'passing_percentage' => 35,
+            ],
+        ], $school->settings ?? []);
     }
 
     public function school(): JsonResponse
@@ -78,33 +92,49 @@ class SettingsController extends Controller
         return response()->json(['success' => true, 'data' => $school]);
     }
 
+    public function branding(): JsonResponse
+    {
+        $school = School::findOrFail(currentSchoolId());
+
+        return response()->json([
+            'success' => true,
+            'data' => $school->only(['name', 'address', 'phone', 'email', 'logo']),
+        ]);
+    }
+
     public function updateSchool(Request $request): JsonResponse
-        {
-            $request->validate([
-                'name'             => 'sometimes|required|string|max:255',
-                'email'            => 'sometimes|required|email|max:255',
-                'phone'            => 'sometimes|required|string|max:20',
-                'address'          => 'sometimes|required|string|max:500',
-                'principal'        => 'sometimes|required|string|max:255',
-                'website'          => 'sometimes|nullable|url',
-                'board'            => 'sometimes|required|string|max:50',
-                'affiliation_no'   => 'sometimes|nullable|string|max:50',
-                'established_year' => 'sometimes|required|integer|between:1800,' . now()->year,
-                'logo'             => 'sometimes|nullable|image|mimes:png,jpg,jpeg|max:2048',
-            ]);
+    {
+        $validated = $request->validate([
+            'name'             => 'sometimes|required|string|max:255',
+            'email'            => 'sometimes|required|email|max:255',
+            'phone'            => 'sometimes|nullable|string|max:20',
+            'address'          => 'sometimes|nullable|string|max:500',
+            'principal'        => 'sometimes|nullable|string|max:255',
+            'website'          => 'sometimes|nullable|url',
+            'board'            => 'sometimes|nullable|string|max:50',
+            'affiliation_no'   => 'sometimes|nullable|string|max:50',
+            'established_year' => 'sometimes|required|integer|between:1800,' . now()->year,
+            'admission_prefix' => ['sometimes', 'required', 'string', 'max:20', 'regex:/^[A-Za-z0-9]+$/'],
+            'logo'             => 'sometimes|nullable|image|mimes:png,jpg,jpeg|max:2048',
+        ]);
 
-            $school = School::findOrFail(currentSchoolId());
+        $school = School::findOrFail(currentSchoolId());
 
-            if ($request->hasFile('logo')) {
-                if ($school->logo) {
-                    Storage::disk('public')->delete($school->logo);
-                }
-                $path = $request->file('logo')->store('schools/logos', 'public');
-                $school->logo = $path;
+        if ($request->hasFile('logo')) {
+            if ($school->logo) {
+                Storage::disk('public')->delete($school->logo);
             }
-
-            $school->update($request->except('logo'));
-
-            return response()->json(['success' => true, 'data' => $school]);
+            $validated['logo'] = $request->file('logo')->store('schools/logos', 'public');
+        } else {
+            unset($validated['logo']);
         }
+
+        if (isset($validated['admission_prefix'])) {
+            $validated['admission_prefix'] = strtoupper(trim($validated['admission_prefix']));
+        }
+
+        $school->fill($validated)->save();
+
+        return response()->json(['success' => true, 'data' => $school]);
+    }
 }

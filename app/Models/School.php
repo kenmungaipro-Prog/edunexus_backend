@@ -22,10 +22,13 @@ class School extends Model
         'board',
         'affiliation_no',
         'school_code',
+        'admission_prefix',
+        'settings',
     ];
 
     protected $casts = [
         'established_year' => 'integer',
+        'settings' => 'array',
     ];
 
     // Relationships

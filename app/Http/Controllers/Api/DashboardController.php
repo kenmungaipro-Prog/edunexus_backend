@@ -4,12 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
+use App\Models\Book;
+use App\Models\BookIssue;
+use App\Models\ClassRoom;
 use App\Models\Event;
 use App\Models\Fee;
+use App\Models\Grade;
 use App\Models\Student;
 use App\Models\Teacher;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Cache;
 
 class DashboardController extends Controller
 {
@@ -17,36 +20,70 @@ class DashboardController extends Controller
     {
         $schoolId = currentSchoolId();
 
-        $stats = Cache::remember("dashboard.stats.{$schoolId}", 300, function () use ($schoolId) {
-            $totalStudents  = Student::where('school_id', $schoolId)->where('status', 'active')->count();
-            $totalTeachers  = Teacher::where('school_id', $schoolId)->where('status', 'active')->count();
-            $feeCollected   = (float) Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
+        $teacher = Teacher::where('school_id', $schoolId)
+            ->where('user_id', auth()->id())
+            ->first();
+        $teacherClassRows = $teacher
+            ? ClassRoom::where('school_id', $schoolId)
+                ->where('class_teacher_id', $teacher->id)
+                ->withCount('activeEnrolledStudents')
+                ->get()
+            : collect();
+        $teacherClassIds = $teacherClassRows->pluck('id')->all();
+
+        $classDistribution = ClassRoom::where('school_id', $schoolId)
+            ->withCount('activeEnrolledStudents')
+            ->get()
+            ->groupBy('grade')
+            ->map(fn ($classes, $grade) => [
+                'grade'    => "Grade {$grade}",
+                'students' => (int) $classes->sum('active_enrolled_students_count'),
+                'classes'  => $classes->count(),
+            ])
+            ->values();
+
+        $topPerformers = Grade::query()
+            ->selectRaw('student_id, ROUND(AVG(percentage), 1) as average_percentage')
+            ->whereHas('student', function ($query) use ($schoolId, $teacher, $teacherClassIds) {
+                $query->where('school_id', $schoolId)->where('status', 'active');
+                if ($teacher) {
+                    $query->whereIn('class_id', $teacherClassIds);
+                }
+            })
+            ->with('student.classRoom')
+            ->groupBy('student_id')
+            ->orderByDesc('average_percentage')
+            ->limit(5)
+            ->get()
+            ->map(fn ($grade) => [
+                'id'         => $grade->student_id,
+                'name'       => $grade->student->full_name,
+                'grade_name' => $grade->student->classRoom?->name,
+                'percentage' => (float) $grade->average_percentage,
+            ]);
+
+        $stats = [
+            'students'          => Student::where('school_id', $schoolId)->where('status', 'active')->count(),
+            'teachers'          => Teacher::where('school_id', $schoolId)->where('status', 'active')->count(),
+            'fee_collected'     => (float) Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
                 ->where('status', 'paid')
                 ->whereYear('paid_at', now()->year)
-                ->sum('amount');
-            $avgAttendance  = $this->avgAttendance($schoolId);
-            $upcomingEvents = Event::where('school_id', $schoolId)
-                ->where('event_date', '>=', now())
-                ->count();
-            $pendingFees    = Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
+                ->sum('amount'),
+            'avg_attendance'    => $this->avgAttendance($schoolId, $teacher ? $teacherClassIds : null),
+            'upcoming_events'   => Event::where('school_id', $schoolId)
+                ->whereDate('event_date', '>=', today())
+                ->count(),
+            'pending_fees'      => Fee::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
                 ->where('status', 'pending')
-                ->count();
-            $lowAttendance  = Student::where('school_id', $schoolId)
-                ->where('status', 'active')
-                ->get()
-                ->filter(fn ($s) => $s->attendance_percentage < 80)
-                ->count();
-
-            return [
-                'students'        => $totalStudents,
-                'teachers'        => $totalTeachers,
-                'fee_collected'   => $feeCollected,
-                'avg_attendance'  => $avgAttendance,
-                'upcoming_events' => $upcomingEvents,
-                'pending_fees'    => $pendingFees,
-                'low_attendance'  => $lowAttendance,
-            ];
-        });
+                ->count(),
+            'low_attendance'    => $this->lowAttendanceCount($schoolId),
+            'classes_count'     => $teacherClassRows->count(),
+            'my_students_count' => (int) $teacherClassRows->sum('active_enrolled_students_count'),
+            'total_books'       => Book::count(),
+            'borrowed_books'    => BookIssue::where('status', 'issued')->count(),
+            'class_distribution'=> $classDistribution,
+            'top_performers'    => $topPerformers,
+        ];
 
         return response()->json(['success' => true, 'data' => $stats]);
     }
@@ -136,22 +173,7 @@ class DashboardController extends Controller
         ]);
 
         $attendanceChart = collect(range(1, 12))->mapWithKeys(function ($m) use ($schoolId) {
-            $total = Attendance::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
-                ->whereMonth('date', $m)
-                ->whereYear('date', now()->year)
-                ->count();
-
-            $present = Attendance::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
-                ->whereMonth('date', $m)
-                ->whereYear('date', now()->year)
-                ->where('status', 'present')
-                ->count();
-
-            return [
-                now()->month($m)->format('M') => $total > 0
-                    ? round(($present / $total) * 100, 1)
-                    : 0,
-            ];
+            return [now()->month($m)->format('M') => $this->attendanceRate($schoolId, $m, now()->year)];
         });
 
         return response()->json([
@@ -164,19 +186,42 @@ class DashboardController extends Controller
         ]);
     }
 
-    private function avgAttendance(int $schoolId): float
+    private function avgAttendance(int $schoolId, ?array $classIds = null): ?float
     {
-        $total = Attendance::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
+        return $this->attendanceRate($schoolId, now()->month, now()->year, $classIds);
+    }
+
+    private function attendanceRate(int $schoolId, int $month, int $year, ?array $classIds = null): ?float
+    {
+        $counts = Attendance::whereHas('student', function ($query) use ($schoolId, $classIds) {
+            $query->where('school_id', $schoolId);
+            if ($classIds !== null) {
+                $query->whereIn('class_id', $classIds);
+            }
+        })
+            ->whereMonth('date', $month)
+            ->whereYear('date', $year)
+            ->whereIn('status', ['present', 'late', 'absent'])
+            ->selectRaw("COUNT(*) as total, SUM(CASE WHEN status IN ('present', 'late') THEN 1 ELSE 0 END) as attended")
+            ->first();
+
+        return $counts->total > 0
+            ? round(((int) $counts->attended / (int) $counts->total) * 100, 1)
+            : null;
+    }
+
+    private function lowAttendanceCount(int $schoolId): int
+    {
+        return Attendance::whereHas('student', fn ($query) => $query
+            ->where('school_id', $schoolId)
+            ->where('status', 'active'))
             ->whereMonth('date', now()->month)
             ->whereYear('date', now()->year)
+            ->whereIn('status', ['present', 'late', 'absent'])
+            ->select('student_id')
+            ->groupBy('student_id')
+            ->havingRaw("SUM(CASE WHEN status IN ('present', 'late') THEN 1 ELSE 0 END) / COUNT(*) < ?", [0.8])
+            ->get()
             ->count();
-
-        $present = Attendance::whereHas('student', fn ($q) => $q->where('school_id', $schoolId))
-            ->whereMonth('date', now()->month)
-            ->whereYear('date', now()->year)
-            ->where('status', 'present')
-            ->count();
-
-        return $total > 0 ? round(($present / $total) * 100, 1) : 0.0;
     }
 }

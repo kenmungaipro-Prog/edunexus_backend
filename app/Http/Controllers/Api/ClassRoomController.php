@@ -35,7 +35,7 @@ class ClassRoomController extends Controller
             'grade'           => 'required|integer|between:1,12',
             'section'         => 'required|string|max:5',
             'class_teacher_id'=> 'nullable|exists:teachers,id',
-            'capacity'        => 'required|integer|min:1',
+            'capacity'        => 'sometimes|integer|min:1',
             'room'            => 'nullable|string|max:50',
             'subjects'        => 'array',
             'subjects.*'      => 'exists:subjects,id',
@@ -43,6 +43,7 @@ class ClassRoomController extends Controller
 
         // 1. Grab the validated data
         $data = $request->except('subjects');
+        $data['capacity'] ??= 40;
         
         // 2. Inject the missing school_id (using 1 as a fallback for local testing)
         $data['school_id'] = $request->user()->school_id ?? 1;

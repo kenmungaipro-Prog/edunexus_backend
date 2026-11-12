@@ -80,6 +80,18 @@ test('user can logout', function () {
         ->assertJsonPath('success', true);
 });
 
+test('user can revoke all sessions from all devices', function () {
+    $firstToken = $this->admin->createToken('api')->plainTextToken;
+    $this->admin->createToken('other-device');
+
+    $this->withToken($firstToken)
+        ->postJson('/api/v1/auth/logout-all-devices')
+        ->assertOk()
+        ->assertJsonPath('success', true);
+
+    expect($this->admin->tokens()->count())->toBe(0);
+});
+
 test('user can change password', function () {
     $this->actingAs($this->admin)
         ->postJson('/api/v1/auth/change-password', [
@@ -98,10 +110,8 @@ test('teacher cannot access admin-only endpoints', function () {
     ]);
 
     $this->actingAs($teacher)
-        ->deleteJson('/api/v1/teachers/1')
+        ->deleteJson('/api/v1/teachers/' . $teacher->teacher->id)
         ->assertStatus(403);
 });
-
-
 
 

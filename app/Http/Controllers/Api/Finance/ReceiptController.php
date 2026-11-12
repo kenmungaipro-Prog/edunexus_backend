@@ -11,6 +11,7 @@ use App\Models\Receipt;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\Response;
 
 class ReceiptController extends Controller
@@ -69,7 +70,19 @@ class ReceiptController extends Controller
             'payment.allocations.invoice',
         ]);
 
-        $pdf = Pdf::loadView('receipts.payment', compact('receipt'))
+        $logoDataUri = null;
+        $logoPath = $receipt->school?->logo;
+        if ($logoPath) {
+            abort_unless(
+                Storage::disk('public')->exists($logoPath),
+                422,
+                'The configured school logo is missing. Please upload it again in Settings.',
+            );
+            $logoDataUri = 'data:' . (Storage::disk('public')->mimeType($logoPath) ?: 'image/png')
+                . ';base64,' . base64_encode(Storage::disk('public')->get($logoPath));
+        }
+
+        $pdf = Pdf::loadView('receipts.payment', compact('receipt', 'logoDataUri'))
             ->setPaper('a5', 'portrait');
 
         return $pdf->download("receipt-{$receipt->receipt_number}.pdf");

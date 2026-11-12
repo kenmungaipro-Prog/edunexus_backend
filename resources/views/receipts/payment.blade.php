@@ -7,6 +7,7 @@
         body { color: #1f2937; font-family: DejaVu Sans, sans-serif; font-size: 11px; }
         .receipt { padding: 28px; }
         .header { border-bottom: 2px solid #2563eb; margin-bottom: 20px; padding-bottom: 14px; }
+        .school-logo { float: right; max-height: 64px; max-width: 90px; object-fit: contain; }
         .school { color: #1d4ed8; font-size: 19px; font-weight: bold; }
         .contact { color: #64748b; font-size: 9px; line-height: 1.5; margin-top: 4px; }
         .title { color: #111827; font-size: 15px; font-weight: bold; margin-top: 18px; }
@@ -24,6 +25,9 @@
 <body>
 <div class="receipt">
     <div class="header">
+        @if($logoDataUri)
+            <img class="school-logo" src="{{ $logoDataUri }}" alt="School logo">
+        @endif
         <div class="school">{{ $receipt->school->name ?? 'EduNexus School' }}</div>
         <div class="contact">
             {{ $receipt->school->address ?? '' }}<br>

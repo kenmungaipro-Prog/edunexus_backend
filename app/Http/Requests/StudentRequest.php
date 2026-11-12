@@ -14,6 +14,13 @@ class StudentRequest extends FormRequest
 {
     public function authorize(): bool { return true; }
 
+    protected function prepareForValidation(): void
+    {
+        if (is_string($this->input('admission_no'))) {
+            $this->merge(['admission_no' => trim($this->input('admission_no'))]);
+        }
+    }
+
     public function rules(): array
     {
         $studentId = $this->route('student')?->id;
@@ -48,6 +55,10 @@ class StudentRequest extends FormRequest
             'profile_photo' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:2048',
             'status'        => 'sometimes|in:active,inactive,alumni',
             'admission_date'=> 'nullable|date',
+            'admission_no'  => $isUpdate
+                ? 'prohibited'
+                : ['nullable', 'string', 'max:255', Rule::unique('students', 'admission_no')],
+            'existing_student' => $isUpdate ? 'prohibited' : 'sometimes|boolean',
             'religion'      => 'nullable|string|max:50',
             'category'      => 'nullable|in:General,OBC,SC,ST,EWS',
             // Parent creation fields (only on store)
@@ -143,6 +154,27 @@ class StudentRequest extends FormRequest
 
                 if ($contact && ! $contact->isParent()) {
                     $validator->errors()->add('emergency_contact_parent_id', 'The emergency contact must be a parent user.');
+                }
+            }
+
+            if ($this->isMethod('POST')) {
+                $isExistingStudent = $this->boolean('existing_student');
+                if ($this->filled('admission_no') && ! $isExistingStudent) {
+                    $validator->errors()->add('admission_no', 'Confirm that this is an existing student before supplying an admission number.');
+                }
+
+                if ($isExistingStudent) {
+                    if (! $this->filled('admission_no')) {
+                        $validator->errors()->add('admission_no', 'Enter the student\'s official admission number.');
+                    }
+
+                    if (
+                        ! $this->filled('admission_date')
+                        || $validator->errors()->has('admission_date')
+                        || $this->input('admission_date') >= now()->toDateString()
+                    ) {
+                        $validator->errors()->add('admission_date', 'An official admission number can only be used when the admission date is before today.');
+                    }
                 }
             }
         });

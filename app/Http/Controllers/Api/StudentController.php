@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StudentRequest;
 use App\Models\Student;
 use App\Models\ParentProfile;
+use App\Models\School;
 use App\Models\User;
 use App\Models\AcademicSession;
 use App\Models\Invoice;
@@ -48,9 +49,57 @@ class StudentController extends Controller
         ]);
     }
 
+    public function checkAdmissionNumber(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'admission_no' => 'required|string|max:255',
+        ]);
+
+        $student = Student::withTrashed()
+            ->with('classRoom:id,name')
+            ->where('admission_no', trim($validated['admission_no']))
+            ->first();
+
+        if (! $student) {
+            return response()->json([
+                'success' => true,
+                'data' => ['exists' => false, 'student' => null],
+            ]);
+        }
+
+        if ($student->school_id !== currentSchoolId()) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'exists' => true,
+                    'student' => null,
+                    'message' => 'This admission number is already in use and cannot be reused.',
+                ],
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'exists' => true,
+                'student' => [
+                    'id' => $student->id,
+                    'full_name' => $student->full_name,
+                    'admission_no' => $student->admission_no,
+                    'admission_date' => $student->admission_date?->toDateString(),
+                    'class_name' => $student->classRoom?->name,
+                    'status' => $student->trashed() ? 'deleted' : $student->status,
+                ],
+                'message' => 'This admission number already exists in EduNexus.',
+            ],
+        ]);
+    }
+
     public function store(StudentRequest $request): JsonResponse
     {
-        $student = DB::transaction(function () use ($request) {
+        $validated = $request->validated();
+        $student = DB::transaction(function () use ($request, $validated) {
+            $school = School::whereKey(currentSchoolId())->lockForUpdate()->firstOrFail();
 
             $parentId = $this->resolveParent($request, 'parent_id', 'parent_email', 'parent_name', 'parent_phone');
             $secondaryParentId = $this->resolveParent($request, 'secondary_parent_id', 'secondary_parent_email', 'secondary_parent_name', 'secondary_parent_phone');
@@ -58,14 +107,17 @@ class StudentController extends Controller
                 ? $request->emergency_contact_parent_id
                 : null;
 
+            unset($validated['admission_no'], $validated['existing_student']);
             $student = Student::create([
-                ...$request->validated(),
+                ...$validated,
                 'school_id'    => currentSchoolId(),
                 'session_id'   => $request->session_id ?? currentSession(),
                 'parent_id'    => $parentId,
                 'secondary_parent_id' => $secondaryParentId,
                 'emergency_contact_parent_id' => $emergencyContactId,
-                'admission_no' => $this->generateAdmissionNo(),
+                'admission_no' => $request->boolean('existing_student')
+                    ? $request->input('admission_no')
+                    : $this->generateAdmissionNo($school),
                 'roll_number'  => $this->generateRollNumber($request->class_id),
             ]);
 
@@ -131,12 +183,60 @@ class StudentController extends Controller
         ]);
     }
 
-    public function destroy(Student $student): JsonResponse
+    public function destroy(Request $request, Student $student): JsonResponse
     {
         $this->authorizeSchool($student);
-        $student->delete();
 
-        return response()->json(['success' => true, 'message' => 'Student removed.']);
+        $validated = $request->validate([
+            'remove_orphaned_parents' => ['sometimes', 'boolean'],
+        ]);
+        $parentIds = array_filter(array_unique([
+            $student->parent_id,
+            $student->secondary_parent_id,
+            $student->emergency_contact_parent_id,
+        ]));
+        $removedParents = 0;
+
+        DB::transaction(function () use ($student, $parentIds, $validated, &$removedParents) {
+            $student->delete();
+
+            if (!($validated['remove_orphaned_parents'] ?? false)) {
+                return;
+            }
+
+            foreach ($parentIds as $parentId) {
+                $hasOtherActiveStudents = Student::where('school_id', $student->school_id)
+                    ->where(function ($query) use ($parentId) {
+                        $query->where('parent_id', $parentId)
+                            ->orWhere('secondary_parent_id', $parentId)
+                            ->orWhere('emergency_contact_parent_id', $parentId);
+                    })
+                    ->exists();
+
+                if ($hasOtherActiveStudents) {
+                    continue;
+                }
+
+                $profile = ParentProfile::where('school_id', $student->school_id)
+                    ->where('user_id', $parentId)
+                    ->first();
+
+                if (!$profile) {
+                    continue;
+                }
+
+                $profile->user()->update(['status' => 'inactive']);
+                $profile->delete();
+                $removedParents++;
+            }
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => $removedParents > 0
+                ? "Student removed; {$removedParents} unshared parent account(s) deactivated."
+                : 'Student removed.',
+        ]);
     }
 
     public function import(Request $request): JsonResponse
@@ -281,13 +381,22 @@ class StudentController extends Controller
         ]);
     }
 
-    private function generateAdmissionNo(): string
+    private function generateAdmissionNo(School $school): string
     {
-        $year  = now()->format('Y');
-        $count = Student::where('school_id', currentSchoolId())
-                        ->whereYear('created_at', $year)
-                        ->count() + 1;
-        return "ADM-{$year}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+        $prefix = strtoupper($school->admission_prefix ?: 'ADM');
+        $admissionNumbers = Student::withTrashed()
+            ->where('admission_no', 'like', "{$prefix}-%")
+            ->pluck('admission_no');
+
+        $lastNumber = $admissionNumbers->reduce(function (int $highest, string $admissionNumber) use ($prefix) {
+            if (preg_match('/^' . preg_quote($prefix, '/') . '-(\d+)$/i', $admissionNumber, $matches)) {
+                return max($highest, (int) $matches[1]);
+            }
+
+            return $highest;
+        }, 0);
+
+        return $prefix . '-' . str_pad((string) ($lastNumber + 1), 4, '0', STR_PAD_LEFT);
     }
 
     private function generateRollNumber(int $classId): string

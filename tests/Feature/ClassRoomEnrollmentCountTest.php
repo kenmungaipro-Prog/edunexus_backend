@@ -80,3 +80,25 @@ test('class enrollment counts separate active and inactive assigned students and
         ->assertJsonPath('data.0.active_students_count', 2)
         ->assertJsonPath('data.0.inactive_students_count', 1);
 });
+
+test('class can be created without specifying capacity and uses the default', function () {
+    $school = School::factory()->create();
+    AcademicSession::factory()->create([
+        'school_id' => $school->id,
+        'is_current' => true,
+    ]);
+    $user = User::factory()->create([
+        'school_id' => $school->id,
+        'role' => 'admin',
+        'status' => 'active',
+    ]);
+
+    $this->actingAs($user)
+        ->postJson('/api/v1/classes', [
+            'name' => 'Grade 4',
+            'grade' => 4,
+            'section' => 'A',
+        ])
+        ->assertCreated()
+        ->assertJsonPath('data.capacity', 40);
+});

@@ -8,12 +8,15 @@ use App\Models\{
     ClassRoom,
     Fee,
     FeeType,
+    Payment,
     School,
     Student,
     User
 };
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 
 uses(RefreshDatabase::class);
@@ -63,13 +66,35 @@ test('fee requires transaction id for upi payment', function () {
 });
 
 test('fee summary returns correct totals', function () {
-    Fee::factory(3)->create([
+    Payment::query()->create([
+        'school_id' => $this->school->id,
         'student_id'   => $this->student->id,
-        'fee_type_id'  => $this->feeType->id,
-        'session_id'   => $this->session->id,
-        'collected_by' => $this->accountant->id,
-        'amount'       => 5000,
-        'status'       => 'paid',
+        'payment_number' => 'PAY-TEST-1',
+        'payment_method' => 'cash',
+        'amount'         => 5000,
+        'payment_date'   => $this->session->start_date->addDays(1),
+        'status'         => 'successful',
+        'received_by'    => $this->accountant->id,
+    ]);
+    Payment::query()->create([
+        'school_id' => $this->school->id,
+        'student_id' => $this->student->id,
+        'payment_number' => 'PAY-TEST-2',
+        'payment_method' => 'cash',
+        'amount' => 5000,
+        'payment_date' => $this->session->start_date->addDays(2),
+        'status' => 'fully_allocated',
+        'received_by' => $this->accountant->id,
+    ]);
+    Payment::query()->create([
+        'school_id' => $this->school->id,
+        'student_id' => $this->student->id,
+        'payment_number' => 'PAY-TEST-3',
+        'payment_method' => 'cash',
+        'amount' => 5000,
+        'payment_date' => $this->session->start_date->addDays(3),
+        'status' => 'partially_allocated',
+        'received_by' => $this->accountant->id,
     ]);
 
     $response = $this->actingAs($this->admin)
@@ -88,6 +113,10 @@ test('teacher cannot access fee endpoints', function () {
 });
 
 test('receipt generates pdf for paid fee', function () {
+    Storage::fake('public');
+    $logoPath = UploadedFile::fake()->image('school-logo.png')->store('schools/logos', 'public');
+    $this->school->update(['logo' => $logoPath]);
+
     $fee = Fee::factory()->create([
         'student_id'   => $this->student->id,
         'fee_type_id'  => $this->feeType->id,

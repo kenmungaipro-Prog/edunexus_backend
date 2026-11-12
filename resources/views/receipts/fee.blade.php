@@ -9,6 +9,7 @@
     .receipt { max-width: 600px; margin: 0 auto; padding: 32px; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #4f8ef7; padding-bottom: 16px; margin-bottom: 20px; }
     .school-name { font-size: 20px; font-weight: 700; color: #4f8ef7; }
+    .school-logo { max-width: 90px; max-height: 64px; object-fit: contain; }
     .school-meta { font-size: 10px; color: #666; margin-top: 4px; line-height: 1.5; }
     .receipt-title { font-size: 16px; font-weight: 700; text-align: right; color: #333; }
     .receipt-no { font-size: 11px; color: #666; text-align: right; font-family: monospace; }
@@ -28,6 +29,9 @@
 <body>
 <div class="receipt">
   <div class="header">
+    @if($logoDataUri)
+      <img class="school-logo" src="{{ $logoDataUri }}" alt="School logo">
+    @endif
     <div>
       <div class="school-name">{{ $fee->student->school->name ?? 'EduNexus School' }}</div>
       <div class="school-meta">

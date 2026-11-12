@@ -6,9 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\ChartOfAccount;
 use App\Models\JournalEntry;
 use App\Models\JournalEntryLine;
-use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 
 class JournalEntryController extends Controller
@@ -250,35 +251,56 @@ class JournalEntryController extends Controller
 
         $accounts = ChartOfAccount::where('school_id', $request->user()->school_id)
             ->where('is_active', true)
+            ->orderBy('account_type')
+            ->orderBy('sort_order')
+            ->orderBy('account_code')
             ->with(['journalEntryLines' => function ($q) use ($fromDate, $toDate) {
                 $q->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
                     $entry->where('status', 'posted')
                         ->whereBetween('entry_date', [$fromDate, $toDate]);
                 });
             }])
-            ->get()
-            ->map(function ($account) {
-                $totalDebit = $account->journalEntryLines->sum('debit');
-                $totalCredit = $account->journalEntryLines->sum('credit');
+            ->get();
+        $directDebits = $accounts->mapWithKeys(function ($account) {
+            return [$account->id => $account->journalEntryLines->sum('debit')];
+        });
+        $directCredits = $accounts->mapWithKeys(function ($account) {
+            return [$account->id => $account->journalEntryLines->sum('credit')];
+        });
+        $rolledDebits = $this->rollupAccountValues($accounts, $directDebits);
+        $rolledCredits = $this->rollupAccountValues($accounts, $directCredits);
 
-                $balance = $account->normal_balance === 'debit'
-                    ? $totalDebit - $totalCredit
-                    : $totalCredit - $totalDebit;
+        $accounts = $accounts->map(function ($account) use ($rolledDebits, $rolledCredits) {
+            $totalDebit = $rolledDebits[$account->id];
+            $totalCredit = $rolledCredits[$account->id];
 
-                return [
-                    'id' => $account->id,
-                    'account_code' => $account->account_code,
-                    'account_name' => $account->account_name,
-                    'account_type' => $account->account_type,
-                    'normal_balance' => $account->normal_balance,
-                    'debit' => $totalDebit,
-                    'credit' => $totalCredit,
-                    'balance' => $balance,
-                ];
-            });
+            $balance = $account->normal_balance === 'debit'
+                ? $totalDebit - $totalCredit
+                : $totalCredit - $totalDebit;
 
-        $totalDebits = $accounts->sum('debit');
-        $totalCredits = $accounts->sum('credit');
+            return [
+                'id' => $account->id,
+                'parent_account_id' => $account->parent_account_id,
+                'account_code' => $account->account_code,
+                'account_name' => $account->account_name,
+                'account_type' => $account->account_type,
+                'normal_balance' => $account->normal_balance,
+                'debit' => $totalDebit,
+                'credit' => $totalCredit,
+                'balance' => $balance,
+            ];
+        });
+
+        $accountsById = $accounts->keyBy('id');
+        $topLevelAccounts = $accounts->filter(function ($account) use ($accountsById) {
+            $parent = $account['parent_account_id'] === null
+                ? null
+                : $accountsById->get($account['parent_account_id']);
+
+            return !$parent || $parent['account_type'] !== $account['account_type'];
+        });
+        $totalDebits = $topLevelAccounts->sum('debit');
+        $totalCredits = $topLevelAccounts->sum('credit');
 
         return response()->json([
             'success' => true,
@@ -298,39 +320,47 @@ class JournalEntryController extends Controller
         $fromDate = $request->get('from_date', now()->startOfYear()->toDateString());
         $toDate = $request->get('to_date', now()->toDateString());
 
-        $accounts = ChartOfAccount::where('school_id', $request->user()->school_id)
+        $accountRecords = ChartOfAccount::where('school_id', $request->user()->school_id)
             ->where('is_active', true)
             ->whereIn('account_type', ['revenue', 'expense'])
+            ->orderBy('account_type')
+            ->orderBy('sort_order')
+            ->orderBy('account_code')
             ->with(['journalEntryLines' => function ($q) use ($fromDate, $toDate) {
                 $q->whereHas('journalEntry', function ($entry) use ($fromDate, $toDate) {
                     $entry->where('status', 'posted')
                         ->whereBetween('entry_date', [$fromDate, $toDate]);
                 });
             }])
-            ->get()
-            ->map(function ($account) {
-                $totalDebit = $account->journalEntryLines->sum('debit');
-                $totalCredit = $account->journalEntryLines->sum('credit');
+            ->get();
+        $directBalances = $accountRecords->mapWithKeys(function ($account) {
+            $totalDebit = $account->journalEntryLines->sum('debit');
+            $totalCredit = $account->journalEntryLines->sum('credit');
 
-                $balance = $account->normal_balance === 'debit'
-                    ? $totalDebit - $totalCredit
-                    : $totalCredit - $totalDebit;
+            $balance = $account->normal_balance === 'debit'
+                ? $totalDebit - $totalCredit
+                : $totalCredit - $totalDebit;
 
-                return [
-                    'id' => $account->id,
-                    'account_code' => $account->account_code,
-                    'account_name' => $account->account_name,
-                    'account_type' => $account->account_type,
-                    'normal_balance' => $account->normal_balance,
-                    'amount' => $balance,
-                ];
-            });
+            return [$account->id => $balance];
+        });
+        $accountBalances = $this->rollupAccountValues($accountRecords, $directBalances);
+        $accounts = $accountRecords->map(function ($account) use ($accountBalances) {
+            return [
+                'id' => $account->id,
+                'parent_account_id' => $account->parent_account_id,
+                'account_code' => $account->account_code,
+                'account_name' => $account->account_name,
+                'account_type' => $account->account_type,
+                'normal_balance' => $account->normal_balance,
+                'amount' => $accountBalances[$account->id],
+            ];
+        });
 
         $revenues = $accounts->where('account_type', 'revenue')->values();
         $expenses = $accounts->where('account_type', 'expense')->values();
 
-        $totalRevenue = $revenues->sum('amount');
-        $totalExpense = $expenses->sum('amount');
+        $totalRevenue = $this->topLevelTotal($accountRecords->where('account_type', 'revenue'), $accountBalances);
+        $totalExpense = $this->topLevelTotal($accountRecords->where('account_type', 'expense'), $accountBalances);
         $netIncome = $totalRevenue - $totalExpense;
 
         return response()->json([
@@ -362,33 +392,15 @@ class JournalEntryController extends Controller
             }])
             ->get();
 
-        $calculateRolledBalances = function ($accountRecords) {
-            $directBalances = $accountRecords->mapWithKeys(function ($account) {
-                $totalDebit = $account->journalEntryLines->sum('debit');
-                $totalCredit = $account->journalEntryLines->sum('credit');
+        $directBalances = $accounts->mapWithKeys(function ($account) {
+            $totalDebit = $account->journalEntryLines->sum('debit');
+            $totalCredit = $account->journalEntryLines->sum('credit');
 
-                return [$account->id => $account->normal_balance === 'debit'
-                    ? $totalDebit - $totalCredit
-                    : $totalCredit - $totalDebit];
-            });
-            $balances = $directBalances->all();
-            $recordsById = $accountRecords->keyBy('id');
-
-            foreach ($accountRecords as $account) {
-                $amount = $directBalances[$account->id];
-                $parentId = $account->parent_account_id;
-                $visited = [$account->id => true];
-
-                while ($parentId !== null && $recordsById->has($parentId) && !isset($visited[$parentId])) {
-                    $balances[$parentId] += $amount;
-                    $visited[$parentId] = true;
-                    $parentId = $recordsById->get($parentId)->parent_account_id;
-                }
-            }
-            return $balances;
-        };
-
-        $accountBalances = $calculateRolledBalances($accounts);
+            return [$account->id => $account->normal_balance === 'debit'
+                ? $totalDebit - $totalCredit
+                : $totalCredit - $totalDebit];
+        });
+        $accountBalances = $this->rollupAccountValues($accounts, $directBalances);
 
         $accounts = $accounts
             ->filter(fn ($account) => $account->is_active || abs($accountBalances[$account->id]) > 0.00001)
@@ -435,7 +447,15 @@ class JournalEntryController extends Controller
                 });
             }])
             ->get();
-        $incomeAccountBalances = $calculateRolledBalances($incomeAccountRecords);
+        $incomeDirectBalances = $incomeAccountRecords->mapWithKeys(function ($account) {
+            $totalDebit = $account->journalEntryLines->sum('debit');
+            $totalCredit = $account->journalEntryLines->sum('credit');
+
+            return [$account->id => $account->normal_balance === 'debit'
+                ? $totalDebit - $totalCredit
+                : $totalCredit - $totalDebit];
+        });
+        $incomeAccountBalances = $this->rollupAccountValues($incomeAccountRecords, $incomeDirectBalances);
         $incomeAccounts = $incomeAccountRecords->map(function ($account) use ($incomeAccountBalances) {
             return [
                 'id' => $account->id,
@@ -513,7 +533,11 @@ class JournalEntryController extends Controller
             ->get()
             ->groupBy('chart_of_account_id');
 
-        $accounts = $cashAccounts->map(function ($account) use ($periodLines, $openingLines) {
+        $accountParents = ChartOfAccount::where('school_id', $schoolId)
+            ->get(['id', 'parent_account_id'])
+            ->keyBy('id');
+
+        $accounts = $cashAccounts->map(function ($account) use ($periodLines, $openingLines, $accountParents) {
             $startingDebit = $openingLines->get($account->id)?->sum('debit') ?? 0;
             $startingCredit = $openingLines->get($account->id)?->sum('credit') ?? 0;
             $startingBalance = $account->normal_balance === 'debit'
@@ -526,9 +550,20 @@ class JournalEntryController extends Controller
             $outflows = $periodCredit;
             $netChange = $inflows - $outflows;
             $endingBalance = $startingBalance + $netChange;
+            $depth = 0;
+            $parentId = $account->parent_account_id;
+            $visited = [$account->id => true];
+
+            while ($parentId !== null && $accountParents->has($parentId) && !isset($visited[$parentId])) {
+                $visited[$parentId] = true;
+                $depth++;
+                $parentId = $accountParents->get($parentId)->parent_account_id;
+            }
 
             return [
                 'id' => $account->id,
+                'parent_account_id' => $account->parent_account_id,
+                'account_depth' => $depth,
                 'account_code' => $account->account_code,
                 'account_name' => $account->account_name,
                 'account_type' => $account->account_type,
@@ -554,5 +589,38 @@ class JournalEntryController extends Controller
                 'to_date' => $toDate,
             ],
         ]);
+    }
+
+    private function rollupAccountValues(Collection $accounts, Collection $directValues): array
+    {
+        $values = $directValues->all();
+        $accountsById = $accounts->keyBy('id');
+
+        foreach ($accounts as $account) {
+            $amount = $directValues[$account->id] ?? 0;
+            $parentId = $account->parent_account_id;
+            $visited = [$account->id => true];
+
+            while ($parentId !== null && $accountsById->has($parentId) && !isset($visited[$parentId])) {
+                $values[$parentId] += $amount;
+                $visited[$parentId] = true;
+                $parentId = $accountsById->get($parentId)->parent_account_id;
+            }
+        }
+
+        return $values;
+    }
+
+    private function topLevelTotal(Collection $accounts, array $rolledValues): float
+    {
+        $accountsById = $accounts->keyBy('id');
+
+        return (float) $accounts->filter(function ($account) use ($accountsById) {
+            $parent = $account->parent_account_id === null
+                ? null
+                : $accountsById->get($account->parent_account_id);
+
+            return !$parent || $parent->account_type !== $account->account_type;
+        })->sum(fn ($account) => $rolledValues[$account->id] ?? 0);
     }
 }

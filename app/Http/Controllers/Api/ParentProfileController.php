@@ -281,11 +281,46 @@ class ParentProfileController extends Controller
         return "{$slug}-" . uniqid() . '@no-email.local';
     }
 
-    public function destroy(ParentProfile $parent): JsonResponse
+    public function destroy(Request $request, ParentProfile $parent): JsonResponse
     {
         $this->authorizeRoles(['admin']);
 
-        DB::transaction(function () use ($parent) {
+        $validated = $request->validate([
+            'delete_linked_students' => ['sometimes', 'boolean'],
+            'delete_other_parents' => ['sometimes', 'boolean'],
+        ]);
+        abort_unless($parent->school_id === currentSchoolId() || auth()->user()->isSuperAdmin(), 403);
+
+        DB::transaction(function () use ($parent, $validated) {
+            $students = ($validated['delete_linked_students'] ?? false)
+                ? $this->linkedStudents($parent)
+                : collect();
+            $otherParentIds = $students
+                ->flatMap(fn (Student $student) => [
+                    $student->parent_id,
+                    $student->secondary_parent_id,
+                    $student->emergency_contact_parent_id,
+                ])
+                ->filter(fn ($id) => $id && (int) $id !== (int) $parent->user_id)
+                ->unique()
+                ->values();
+
+            if ($students->isNotEmpty()) {
+                Student::whereIn('id', $students->pluck('id'))->delete();
+            }
+
+            if (($validated['delete_other_parents'] ?? false) && $otherParentIds->isNotEmpty()) {
+                $otherProfiles = ParentProfile::where('school_id', $parent->school_id)
+                    ->whereIn('user_id', $otherParentIds)
+                    ->with('user')
+                    ->get();
+
+                foreach ($otherProfiles as $otherProfile) {
+                    $otherProfile->user?->update(['status' => 'inactive']);
+                    $otherProfile->delete();
+                }
+            }
+
             $parent->user->update(['status' => 'inactive']);
             $parent->delete();
         });
