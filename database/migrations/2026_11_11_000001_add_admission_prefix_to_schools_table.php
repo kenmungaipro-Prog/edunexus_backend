@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('schools', function (Blueprint $table) {
-            $table->string('admission_prefix', 20)->default('ADM')->after('school_code');
+            $table->string('admission_prefix', 20)->default('SPSK')->after('school_code');
         });
     }
 

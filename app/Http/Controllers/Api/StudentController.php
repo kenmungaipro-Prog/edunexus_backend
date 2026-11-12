@@ -383,7 +383,7 @@ class StudentController extends Controller
 
     private function generateAdmissionNo(School $school): string
     {
-        $prefix = strtoupper($school->admission_prefix ?: 'ADM');
+        $prefix = strtoupper($school->admission_prefix ?: 'SPSK');
         $admissionNumbers = Student::withTrashed()
             ->where('admission_no', 'like', "{$prefix}-%")
             ->pluck('admission_no');

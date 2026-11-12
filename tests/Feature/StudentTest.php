@@ -121,7 +121,7 @@ test('admin can create a student', function () {
              ->assertJsonPath('data.first_name', 'Aarav')
              ->assertJsonPath('data.last_name',  'Sharma');
 
-    expect($response->json('data.admission_no'))->toBe('ADM-0001');
+    expect($response->json('data.admission_no'))->toBe('SPSK-0001');
 
     $this->assertDatabaseHas('students', [
         'first_name' => 'Aarav',
